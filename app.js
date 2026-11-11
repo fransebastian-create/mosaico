@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v0.8';
+  const VERSION = 'v0.8.1';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1226,10 +1226,11 @@
         : `<p>Conectá tu cuenta de Google para guardar el proyecto en tu Drive y editarlo junto con otra persona.</p>
            <button class="btn primary" data-act="signin">Conectar con Google</button>`;
     } else if (!st.project) {
-      h = `<p class="muted">Cuenta: <b>${escHtml(st.user && st.user.email)}</b></p>
-        <button class="btn primary" data-act="create">Crear proyecto nuevo en mi Drive</button>
-        <p class="muted small">${n ? `Se suben las ${n} publicaciones que hay en este dispositivo.` : 'Se crea una carpeta “Mosaico” en tu Drive.'}</p>
-        <button class="btn" data-act="find">Buscar proyectos compartidos conmigo</button>`;
+      const findBtn = `<button class="btn${n ? '' : ' primary'}" data-act="find">Abrir un proyecto que ya existe</button>
+        <p class="muted small">Tuyo o compartido con vos: se baja la grilla a este dispositivo.</p>`;
+      const createBtn = `<button class="btn${n ? ' primary' : ''}" data-act="create">Crear proyecto nuevo en mi Drive</button>
+        <p class="muted small">${n ? `Se suben las ${n} publicaciones que hay en este dispositivo.` : 'Se crea una carpeta “Mosaico” en tu Drive.'}</p>`;
+      h = `<p class="muted">Cuenta: <b>${escHtml(st.user && st.user.email)}</b></p>` + (n ? createBtn + findBtn : findBtn + createBtn);
       if (foundProjects) {
         h += foundProjects.length
           ? `<div class="plist">${foundProjects.map(p => `<div class="prow"><span><b>${escHtml(p.name)}</b><br><span class="muted small">de ${escHtml(p.owner)}</span></span><button class="btn primary" data-act="open" data-id="${escHtml(p.id)}">Abrir</button></div>`).join('')}</div>`
@@ -1241,7 +1242,7 @@
       h = `<p>Proyecto <b>${escHtml(st.project.name)}</b>${st.project.owner ? ` <span class="muted">· de ${escHtml(st.project.owner)}</span>` : ''}</p>
         <p class="muted small">Cuenta: ${escHtml(st.user && st.user.email)} · ${escHtml(status)}</p>
         <form class="share" data-act="share"><input type="email" required placeholder="email de la otra persona" autocomplete="email"><button class="btn primary">Compartir</button></form>
-        <p class="muted small">Le llega un mail de Google y puede editar. Tiene que entrar a la app y tocar “Buscar proyectos compartidos conmigo”.</p>
+        <p class="muted small">Le llega un mail de Google y puede editar. Tiene que entrar a la app, conectar Google y tocar “Abrir un proyecto que ya existe”.</p>
         <div class="row">
           <button class="chip" data-act="sync">Sincronizar ahora</button>
           <a class="chip" href="${escHtml(Sync.folderUrl())}" target="_blank" rel="noopener">Ver carpeta en Drive</a>
