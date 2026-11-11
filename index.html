@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Mosaico">
+<title>Mosaico</title>
+<link rel="stylesheet" href="styles.css?v=0.6">
+</head>
+<body>
+<div id="app">
+  <section id="gridPane">
+    <header class="bar">
+      <h1>Mosaico</h1>
+      <div class="bar-actions">
+        <button id="viewToggle" class="chip" title="Proporción de las miniaturas en la grilla">3:4</button>
+        <button id="origToggle" class="chip" title="Ver la grilla sin ajustes de color">Originales</button>
+        <button id="cloudBtn" class="chip cloud" title="Nube y proyecto compartido"><span class="cloud-ico">☁︎</span><span id="cloudLabel">Nube</span></button>
+        <label class="btn primary">+ Agregar<input id="fileInput" type="file" accept="image/*,video/*,.heic,.heif,.mov,.mp4,.m4v" multiple hidden></label>
+      </div>
+    </header>
+    <div id="selectBar" class="selectbar" hidden>
+      <span id="selectCount">Tocá las fotos</span>
+      <button id="selectAll" class="chip">Todas</button>
+      <button id="selectCancel" class="chip">Cancelar</button>
+      <button id="selectApply" class="btn primary">Pegar</button>
+    </div>
+    <div id="grid" class="grid"></div>
+    <div id="empty" class="empty">
+      <p><strong>Tu grilla está vacía</strong></p>
+      <p>Tocá <em>+ Agregar</em> para subir fotos<span class="desk-only"> o arrastralas acá</span>.</p>
+    </div>
+    <footer class="bar bottom">
+      <span id="count"></span>
+      <button id="downloadAll" class="btn">Descargar todas</button>
+    </footer>
+  </section>
+
+  <section id="editorPane">
+    <header class="bar">
+      <button id="backBtn" class="chip back">‹ Grilla</button>
+      <span id="editorTitle"></span>
+      <div class="bar-actions">
+        <button id="deleteBtn" class="chip danger">Eliminar</button>
+        <button id="downloadBtn" class="btn primary">Descargar</button>
+      </div>
+    </header>
+    <div class="stage" id="stage">
+      <div class="frame" id="frame">
+        <canvas id="preview"></canvas>
+        <div class="guides"></div>
+        <span id="lowres" class="badge" hidden>Resolución baja</span>
+      </div>
+    </div>
+    <div class="tools">
+      <div class="row">
+        <button id="beforeBtn" class="chip" title="Mantené apretado para ver la foto sin ajustes">◐ Antes</button>
+        <button id="copyBtn" class="chip">Copiar ajustes</button>
+        <button id="pasteBtn" class="chip" disabled>Pegar</button>
+        <button id="pasteManyBtn" class="chip" disabled>Pegar en…</button>
+        <button id="resetBtn" class="chip">Restablecer</button>
+      </div>
+      <div class="slider frame-row" id="frameRow" hidden>
+        <label><span>Fotograma de portada</span><output id="frameOut">0:00</output></label>
+        <div class="frame-ctl">
+          <button id="framePrev" class="chip" title="Fotograma anterior">‹</button>
+          <input id="frameInput" type="range" min="0" max="1000" step="1" value="0" aria-label="Fotograma de portada">
+          <button id="frameNext" class="chip" title="Fotograma siguiente">›</button>
+        </div>
+      </div>
+      <div class="slider zoom">
+        <label><span>Zoom del recorte</span><output id="zoomOut">100%</output></label>
+        <input id="zoomInput" type="range" min="100" max="500" step="1" value="100">
+      </div>
+      <div class="slider rotate-row">
+        <label><span>Enderezar</span><output id="rotOut">0°</output></label>
+        <div class="frame-ctl">
+          <button id="rotL" class="chip" title="Girar 90° a la izquierda">↺</button>
+          <input id="rotInput" type="range" min="-45" max="45" step="0.1" value="0" aria-label="Enderezar">
+          <button id="rotR" class="chip" title="Girar 90° a la derecha">↻</button>
+        </div>
+      </div>
+      <div id="sliders"></div>
+      <p class="hint">Arrastrá la foto para mover el recorte. Con dos dedos (o el trackpad) podés agrandar, achicar y girar. Doble clic en la foto la recentra; doble clic en un ajuste lo vuelve a cero.</p>
+    </div>
+    <div class="editor-empty" id="editorEmpty">Elegí una foto de la grilla para editarla</div>
+  </section>
+</div>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-card">
+    <p id="sheetText"></p>
+    <button id="sheetShare" class="btn primary">Guardar en Fotos</button>
+    <button id="sheetClose" class="chip">Cerrar</button>
+  </div>
+</div>
+<div id="cloudSheet" class="sheet" hidden>
+  <div class="sheet-card cloud-card">
+    <h2>Nube compartida</h2>
+    <div id="cloudBody"></div>
+    <button id="cloudClose" class="chip">Cerrar</button>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async></script>
+<script src="config.js?v=0.6"></script>
+<script src="drive.js?v=0.6"></script>
+<script src="app.js?v=0.6"></script>
+</body>
+</html>
