@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v0.6';
+  const VERSION = 'v0.7';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
