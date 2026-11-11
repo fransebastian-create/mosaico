@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v0.8.1';
+  const VERSION = 'v0.9';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1280,6 +1280,8 @@
     if (!window.createMosaicoSync) { cloudBtn.hidden = true; return; }
     Sync = window.createMosaicoSync(appApi);
     Sync.onChange(renderCloud);
+    if (Sync.fromRedirect === 'ok' && !Sync.state().project) { cloudSheet.hidden = false; renderCloud(Sync.state()); }
+    else if (Sync.fromRedirect && Sync.fromRedirect !== 'ok') toast('No se pudo conectar con Google: ' + Sync.fromRedirect, false, 8000);
     cloudBtn.addEventListener('click', () => {
       const st = Sync.state();
       if (st.expired && st.project) return cloudAction('signin');   // un toque y reconecta

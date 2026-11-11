@@ -66,8 +66,45 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     });
   }
   // Debe llamarse desde un clic (abre la ventanita de Google).
+  // En celulares (sobre todo iPhone) la ventanita de Google pierde el contacto con la app,
+  // así que ahí la página entera va a Google y vuelve con el permiso en la dirección.
+  const useRedirect = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+    || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)) || navigator.standalone === true;
+  const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
+  const LS_STATE = 'mosaico.oauthState';
+  function signInRedirect() {
+    const stateTok = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    try { sessionStorage.setItem(LS_STATE, stateTok); localStorage.setItem(LS_STATE, stateTok); } catch { }
+    const p = new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: 'token', scope: SCOPE, include_granted_scopes: 'true', state: stateTok });
+    if (st.user && st.user.email) p.set('login_hint', st.user.email); else p.set('prompt', 'consent');
+    location.assign('https://accounts.google.com/o/oauth2/v2/auth?' + p);
+    return new Promise(() => { });   // la página se va
+  }
+  // Al volver de Google: leer el permiso de la dirección (#access_token=…) y limpiarla.
+  function takeRedirectResult() {
+    if (!/[#&](access_token|error)=/.test(location.hash)) return null;
+    const h = new URLSearchParams(location.hash.slice(1));
+    history.replaceState(null, '', location.pathname + location.search);
+    let expect = null;
+    try { expect = sessionStorage.getItem(LS_STATE) || localStorage.getItem(LS_STATE); sessionStorage.removeItem(LS_STATE); localStorage.removeItem(LS_STATE); } catch { }
+    if (!expect || h.get('state') !== expect) return { error: 'la respuesta de Google no coincide; probá de nuevo' };
+    if (h.get('error')) return { error: h.get('error') === 'access_denied' ? 'no se dio el permiso' : h.get('error') };
+    return { access_token: h.get('access_token'), expires_in: +h.get('expires_in') || 3600 };
+  }
+  async function acceptToken(r) {
+    st.token = { access_token: r.access_token, expires_at: Date.now() + (r.expires_in - 60) * 1000 };
+    ls.set(LS_TOKEN, st.token);
+    try {
+      const about = await api('GET', '/about', { query: { fields: 'user(emailAddress,displayName)' } });
+      st.user = { email: about.user.emailAddress, name: about.user.displayName };
+      ls.set(LS_USER, st.user);
+    } catch (e) { console.error(e); }
+    setPhase('idle');
+    start();
+  }
   async function signIn() {
     if (!CLIENT_ID) throw new Error('Falta configurar el ID de cliente de Google');
+    if (useRedirect()) return signInRedirect();
     await gisReady();
     return new Promise((res, rej) => {
       st.tokenClient = google.accounts.oauth2.initTokenClient({
@@ -75,15 +112,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
         scope: SCOPE,
         callback: async r => {
           if (r.error) return rej(new Error(r.error_description || r.error));
-          st.token = { access_token: r.access_token, expires_at: Date.now() + (r.expires_in - 60) * 1000 };
-          ls.set(LS_TOKEN, st.token);
-          try {
-            const about = await api('GET', '/about', { query: { fields: 'user(emailAddress,displayName)' } });
-            st.user = { email: about.user.emailAddress, name: about.user.displayName };
-            ls.set(LS_USER, st.user);
-          } catch (e) { console.error(e); }
-          setPhase('idle');
-          start();
+          await acceptToken(r);
           res(state());
         },
         error_callback: e => rej(new Error(e && e.type === 'popup_closed' ? 'Se cerró la ventana de Google' : (e && e.message) || 'No se pudo conectar')),
@@ -454,13 +483,18 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     await Promise.all(ids.map(trash));
   }
 
-  if (st.project && hasToken()) start();
-  else if (st.project && st.user) setPhase('expired');
+  const back = takeRedirectResult();
+  if (back && back.access_token) acceptToken(back);
+  else {
+    if (st.project && hasToken()) start();
+    else if (st.project && st.user) setPhase('expired');
+  }
 
   return {
     state, onChange(f) { st.listeners.add(f); f(state()); return () => st.listeners.delete(f); },
     signIn, signOut, findProjects, createProject, openProject, leaveProject, share, folderUrl,
     kick, fetchMedia, trashItem, syncNow: () => kick(0),
+    fromRedirect: back ? (back.error || 'ok') : null,   // volvimos recién de Google (celulares)
     _mergeOrder: mergeOrder, _putResumable: putResumable,
   };
 };
