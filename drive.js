@@ -19,6 +19,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
   const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
   const POLL_MS = 6000;
   const PUSH_DELAY = 1500;
+  const CHUNK = 8 * 1024 * 1024;   // subida en partes de 8 MB (múltiplo de 256 KB, como pide Drive)
   const LS_TOKEN = 'mosaico.token', LS_PROJECT = 'mosaico.project', LS_USER = 'mosaico.user';
 
   const ls = {
@@ -100,6 +101,18 @@ window.createMosaicoSync = function createMosaicoSync(app) {
 
   // ---------------- API de Drive ----------------
   class AuthError extends Error { }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const fmtMB = n => (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0) + ' MB';
+  // fetch con límite de tiempo: si la conexión se cuelga, se corta y se reintenta en la próxima vuelta.
+  async function fetchT(url, opts, ms) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), ms);
+    try { return await fetch(url, { ...opts, signal: ctl.signal }); }
+    catch (e) {
+      const err = new Error(ctl.signal.aborted ? 'la conexión tardó demasiado' : 'sin conexión');
+      err.offline = true; throw err;
+    } finally { clearTimeout(t); }
+  }
   async function api(method, path, { query, body, raw, headers, base = API } = {}) {
     if (!hasToken()) throw new AuthError('sesión vencida');
     const url = new URL(base + path);
@@ -107,9 +120,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     const h = { Authorization: 'Bearer ' + st.token.access_token, ...(headers || {}) };
     let b = body;
     if (body && !(body instanceof Blob) && typeof body !== 'string') { b = JSON.stringify(body); h['Content-Type'] = 'application/json'; }
-    let res;
-    try { res = await fetch(url, { method, headers: h, body: b }); }
-    catch (e) { const err = new Error('sin conexión'); err.offline = true; throw err; }
+    const res = await fetchT(url, { method, headers: h, body: b }, body instanceof Blob ? 180000 : 60000);
     if (res.status === 401) { st.token = null; ls.set(LS_TOKEN, null); throw new AuthError('sesión vencida'); }
     if (!res.ok) {
       let msg = res.status + '';
@@ -133,7 +144,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     return api('POST', '/files', { query: { fields: 'id,name' }, body: { name, mimeType: 'application/vnd.google-apps.folder', parents: parent ? [parent] : undefined, appProperties } });
   }
   // Sube un archivo nuevo (multipart si es chico, reanudable si es grande).
-  async function uploadNew(meta, blob) {
+  async function uploadNew(meta, blob, onProgress) {
     const type = blob.type || 'application/octet-stream';
     if (blob.size <= 5 * 1024 * 1024) {
       const boundary = 'mosaico' + Math.random().toString(36).slice(2);
@@ -143,8 +154,14 @@ window.createMosaicoSync = function createMosaicoSync(app) {
       ]);
       return api('POST', '/files', { base: UPLOAD, query: { uploadType: 'multipart', fields: 'id,modifiedTime' }, body, headers: { 'Content-Type': `multipart/related; boundary=${boundary}` } });
     }
+    return putResumable(await startResumable(meta, blob), blob, onProgress);
+  }
+  async function startResumable(meta, blob) {
+    const type = blob.type || 'application/octet-stream';
     const res = await api('POST', '/files', { base: UPLOAD, query: { uploadType: 'resumable', fields: 'id,modifiedTime' }, body: meta, raw: true, headers: { 'X-Upload-Content-Type': type, 'X-Upload-Content-Length': String(blob.size) } });
-    return putResumable(res.headers.get('Location'), blob, type);
+    const loc = res.headers.get('Location');
+    if (!loc) throw new Error('Drive no devolvió la dirección de subida');
+    return loc;
   }
   async function updateContent(fileId, blob) {
     const type = blob.type || 'application/octet-stream';
@@ -152,15 +169,56 @@ window.createMosaicoSync = function createMosaicoSync(app) {
       return api('PATCH', '/files/' + fileId, { base: UPLOAD, query: { uploadType: 'media', fields: 'id,modifiedTime' }, body: blob, headers: { 'Content-Type': type } });
     }
     const res = await api('PATCH', '/files/' + fileId, { base: UPLOAD, query: { uploadType: 'resumable', fields: 'id,modifiedTime' }, body: {}, raw: true, headers: { 'X-Upload-Content-Type': type, 'X-Upload-Content-Length': String(blob.size) } });
-    return putResumable(res.headers.get('Location'), blob, type);
+    return putResumable(res.headers.get('Location'), blob);
   }
-  async function putResumable(location, blob, type) {
+  // Rango ya recibido por Drive según la cabecera Range ("bytes=0-1234"); sin cabecera = nada.
+  const rangeEnd = res => { const r = res.headers.get('Range'); return r ? +r.split('-')[1] + 1 : null; };
+  function sessionGone() { const e = new Error('la subida anterior venció, empieza de nuevo'); e.sessionGone = true; return e; }
+  // Pregunta a Drive cuánto de una subida ya llegó.
+  async function uploadStatus(location, total) {
+    const res = await fetchT(location, { method: 'PUT', headers: { 'Content-Range': `bytes */${total}` } }, 60000);
+    if (res.status === 200 || res.status === 201) return { done: await res.json() };
+    if (res.status === 308) return { offset: rangeEnd(res) || 0 };
+    if (res.status === 404 || res.status === 410) throw sessionGone();
+    throw new Error('Drive: error al consultar la subida (' + res.status + ')');
+  }
+  // Sube en partes de 8 MB, informa el avance, reintenta cada parte y puede seguir desde `resume`.
+  async function putResumable(location, blob, onProgress, resume = false) {
     if (!location) throw new Error('Drive no devolvió la dirección de subida');
-    let res;
-    try { res = await fetch(location, { method: 'PUT', headers: { 'Content-Type': type }, body: blob }); }
-    catch { const err = new Error('sin conexión'); err.offline = true; throw err; }
-    if (!res.ok) throw new Error('Drive: error al subir (' + res.status + ')');
-    return res.json();
+    const total = blob.size;
+    let offset = 0, fails = 0;
+    if (resume) {
+      const q = await uploadStatus(location, total);
+      if (q.done) return q.done;
+      offset = q.offset;
+    }
+    for (;;) {
+      onProgress && onProgress(offset, total);
+      const end = Math.min(offset + CHUNK, total);
+      let res;
+      try {
+        res = await fetchT(location, { method: 'PUT', headers: { 'Content-Range': `bytes ${offset}-${end - 1}/${total}` }, body: blob.slice(offset, end) }, 300000);
+      } catch (e) { res = null; if (++fails > 4) throw e; }
+      if (res && (res.status === 200 || res.status === 201)) { onProgress && onProgress(total, total); return res.json(); }
+      if (res && res.status === 308) {
+        const got = rangeEnd(res);
+        offset = got == null ? end : got;
+        fails = 0;
+        if (offset < total) continue;
+        // Drive no confirmó el final: preguntar
+        const q = await uploadStatus(location, total);
+        if (q.done) return q.done;
+        offset = q.offset; continue;
+      }
+      if (res && (res.status === 404 || res.status === 410)) throw sessionGone();
+      if (res && res.status < 500 && res.status !== 429) throw new Error('Drive: error al subir (' + res.status + ')');
+      if (res && ++fails > 4) throw new Error('Drive: error al subir (' + res.status + ')');
+      // falló la conexión o Drive pidió esperar: esperar un poco y seguir desde lo que llegó
+      await sleep(1500 * fails);
+      const q = await uploadStatus(location, total);
+      if (q.done) return q.done;
+      offset = q.offset;
+    }
   }
   async function download(fileId) {
     const res = await api('GET', '/files/' + fileId, { query: { alt: 'media', supportsAllDrives: true }, raw: true });
@@ -228,7 +286,8 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     if (!blobs) return;
     if (!s.media.orig && blobs.orig) {
       setPhase('syncing', 'Subiendo ' + it.name);
-      s.media.orig = (await uploadNew({ name: `${it.id}-original.jpg`, parents: [A], appProperties: props('orig') }, blobs.orig)).id;
+      s.media.orig = (await uploadNew({ name: `${it.id}-original.jpg`, parents: [A], appProperties: props('orig') }, blobs.orig,
+        (d, t) => setPhase('syncing', `Subiendo ${it.name} · ${Math.floor(d / t * 100)}%`))).id;
       s.media.thumb = (await uploadNew({ name: `${it.id}-miniatura.jpg`, parents: [A], appProperties: props('thumb') }, blobs.thumb)).id;
       s.mediaDirty = false;
       app.persist(it);
@@ -243,9 +302,22 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     if (it.kind === 'video' && !s.media.video) {
       const v = await app.getVideo(it.id);
       if (v) {
-        setPhase('syncing', 'Subiendo video ' + it.name + ' (puede tardar)');
+        const progress = (d, t) => setPhase('syncing', `Subiendo video ${it.name} · ${Math.floor(d / t * 100)}% (${fmtMB(d)} de ${fmtMB(t)})`);
+        progress(0, v.size);
         const ext = (it.name.match(/\.(\w+)$/) || [, 'mov'])[1].toLowerCase();
-        s.media.video = (await uploadNew({ name: `${it.id}-video.${ext}`, parents: [A], appProperties: props('video') }, v)).id;
+        const meta = { name: `${it.id}-video.${ext}`, parents: [A], appProperties: props('video') };
+        let r;
+        if (v.size <= 5 * 1024 * 1024) r = await uploadNew(meta, v);
+        else {
+          // La dirección de subida se guarda: si se corta (o se recarga la página) sigue desde donde quedó.
+          let up = s.videoUpload;
+          if (up && (up.size !== v.size || Date.now() - up.t > 6 * 864e5)) up = null;
+          const resume = !!up;
+          if (!up) { up = s.videoUpload = { uri: await startResumable(meta, v), size: v.size, t: Date.now() }; app.persist(it); }
+          try { r = await putResumable(up.uri, v, progress, resume); }
+          catch (e) { if (e.sessionGone) { s.videoUpload = null; app.persist(it); } throw e; }
+        }
+        s.media.video = r.id; s.videoUpload = null;
         app.persist(it);
       }
     }
@@ -328,7 +400,13 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     st.lastPull = maxT || Date.now();
   }
 
-  async function cycle() {
+  // Una sola pestaña sincroniza a la vez (evita subir lo mismo dos veces).
+  function cycle() {
+    if (st.running || !st.project) return;
+    if (navigator.locks && navigator.locks.request) return navigator.locks.request('mosaico-sync', { ifAvailable: true }, lock => lock ? cycleInner() : null);
+    return cycleInner();
+  }
+  async function cycleInner() {
     if (st.running || !st.project) return;
     if (!hasToken()) { setPhase('expired'); return; }
     if (!navigator.onLine) { setPhase('offline'); return; }
@@ -383,6 +461,6 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     state, onChange(f) { st.listeners.add(f); f(state()); return () => st.listeners.delete(f); },
     signIn, signOut, findProjects, createProject, openProject, leaveProject, share, folderUrl,
     kick, fetchMedia, trashItem, syncNow: () => kick(0),
-    _mergeOrder: mergeOrder,
+    _mergeOrder: mergeOrder, _putResumable: putResumable,
   };
 };
