@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.0.1';
+  const VERSION = 'v1.0.2';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1341,7 +1341,9 @@
       return;
     }
   }
+  cloudBtn.addEventListener('click', () => { if (!Sync) toast('La nube todavía está cargando. Si no responde, cerrá las otras pestañas de Mosaico y recargá.', false, 7000); });
   function startCloud() {
+    if (Sync) return;
     if (!window.createMosaicoSync) { cloudBtn.hidden = true; return; }
     Sync = window.createMosaicoSync(appApi);
     Sync.onChange(renderCloud);
@@ -1381,14 +1383,20 @@
         S.gridAspect = ASPECT; $('#viewToggle').textContent = '4:5';
       }
     } catch { }
-    T.init();
-    const [metas, order, deleted, orderDirty] = await Promise.all([DB.getAll('items'), DB.get('meta', 'order'), DB.get('meta', 'deleted'), DB.get('meta', 'orderDirty')]);
-    S.deleted = new Set(deleted || []);
-    S.orderDirty = !!orderDirty;
-    for (const m of metas) S.items.set(m.id, { ...m, adj: { ...zeroAdj(), ...m.adj }, texts: m.texts || [] });
-    S.order = (order || []).filter(id => S.items.has(id));
-    for (const id of S.items.keys()) if (!S.order.includes(id)) S.order.push(id);
+    // Si la memoria local no responde (p. ej. otra pestaña con una versión vieja la tiene tomada), avisar.
+    const slow = setTimeout(() => toast('Mosaico está esperando la memoria del navegador. Cerrá las otras pestañas de Mosaico y recargá esta.', true), 4000);
+    try {
+      T.init();
+      const [metas, order, deleted, orderDirty] = await Promise.all([DB.getAll('items'), DB.get('meta', 'order'), DB.get('meta', 'deleted'), DB.get('meta', 'orderDirty')]);
+      S.deleted = new Set(deleted || []);
+      S.orderDirty = !!orderDirty;
+      for (const m of metas) S.items.set(m.id, { ...m, adj: { ...zeroAdj(), ...m.adj }, texts: m.texts || [] });
+      S.order = (order || []).filter(id => S.items.has(id));
+      for (const id of S.items.keys()) if (!S.order.includes(id)) S.order.push(id);
+    } catch (e) { reportError(e); }
+    clearTimeout(slow);
     renderGrid();
+    try { startCloud(); } catch (e) { reportError(e); }   // la nube no depende de que carguen las miniaturas
     await Promise.all(S.order.map(async id => {
       const it = S.items.get(id);
       try {
@@ -1398,7 +1406,6 @@
       } catch (e) { console.error(e); }
     }));
     if (S.order.length && !isNarrow()) openEditor(S.order[0]);
-    startCloud();
   }
   init().catch(reportError);
 
