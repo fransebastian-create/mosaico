@@ -292,5 +292,14 @@ body.has-current .editor-empty { display: none; }
   #gridPane .bar h1 { font-size: 15px; }
   #gridPane .bar-actions { gap: 4px; }
   #gridPane .bar-actions .chip, #gridPane .bar-actions .btn { padding: 6px 9px; font-size: 12px; }
-  .chip.cloud.ok #cloudLabel { display: none; }
+  .chip.cloud.ok #cloudLabel, .chip.cloud.busy #cloudLabel { display: none; }
+  #cloudLabel { max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
 }
+
+/* que nada empuje la página hacia los costados en el celular */
+html, body { overflow-x: hidden; max-width: 100%; }
+#gridPane .bar h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#gridPane .bar-actions { flex-shrink: 0; }
+.synclog { text-align: left; font-size: 12px; color: var(--muted); }
+.synclog summary { cursor: pointer; }
+.synclog pre { white-space: pre-wrap; margin: 6px 0 0; font-size: 11px; max-height: 30vh; overflow: auto; }

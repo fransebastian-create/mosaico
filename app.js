@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v0.9';
+  const VERSION = 'v0.9.1';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1252,6 +1252,7 @@
           <button class="chip" data-act="signout">Cerrar sesión de Google</button>
         </div>`;
     }
+    if (st.project && st.log && st.log.length) h += `<details class="synclog"><summary>Registro</summary><pre>${escHtml(st.log.join('\n'))}</pre></details>`;
     if (cloudBusy) h = `<p class="muted">${escHtml(cloudBusy)}</p>` + (cloudBusy.startsWith('Esperando a Google')
       ? `<p class="muted small">Se abre una ventana de Google aparte (fijate en el menú Ventana si quedó atrás). Si la cerraste o no aparece:</p><div class="row"><button class="chip" data-act="signin">Volver a intentar</button></div>` : '');
     cloudBody.innerHTML = h;

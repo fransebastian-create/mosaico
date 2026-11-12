@@ -39,18 +39,34 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     pushTimer: null,
     tokenClient: null,
     listeners: new Set(),
+    log: [],              // registro corto de lo que va pasando (se ve en el panel)
   };
+  function log(msg) {
+    const d = new Date(), hh = n => String(n).padStart(2, '0');
+    st.log.push(`${hh(d.getHours())}:${hh(d.getMinutes())}:${hh(d.getSeconds())} ${msg}`);
+    if (st.log.length > 40) st.log.shift();
+    console.log('[mosaico]', msg);
+  }
+  // Si algo no termina nunca, cortarlo con un error que diga qué era.
+  function withTimeout(p, ms, what) {
+    let t;
+    return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('se trabó ' + what)), ms); })]).finally(() => clearTimeout(t));
+  }
   const tok = ls.get(LS_TOKEN);
   if (tok && tok.expires_at > Date.now() + 60_000) st.token = tok;
 
   function emit() { st.listeners.forEach(f => { try { f(state()); } catch (e) { console.error(e); } }); }
-  function setPhase(phase, detail = '') { st.phase = phase; st.detail = detail; emit(); }
+  function setPhase(phase, detail = '') {
+    if (phase === 'error' || (phase === 'syncing' && detail && !/%/.test(detail))) log((phase === 'error' ? 'Error: ' : '') + detail);
+    st.phase = phase; st.detail = detail; emit();
+  }
   function state() {
     return {
       configured: !!CLIENT_ID,
       signedIn: !!st.token && st.token.expires_at > Date.now(),
       expired: !!st.user && (!st.token || st.token.expires_at <= Date.now()),
       user: st.user, project: st.project, phase: st.phase, detail: st.detail,
+      log: st.log.slice(-15),
     };
   }
 
@@ -249,9 +265,11 @@ window.createMosaicoSync = function createMosaicoSync(app) {
       offset = q.offset;
     }
   }
-  async function download(fileId) {
-    const res = await api('GET', '/files/' + fileId, { query: { alt: 'media', supportsAllDrives: true }, raw: true });
-    return res.blob();
+  async function download(fileId, ms = 120000) {
+    return withTimeout((async () => {
+      const res = await api('GET', '/files/' + fileId, { query: { alt: 'media', supportsAllDrives: true }, raw: true });
+      return res.blob();
+    })(), ms, 'bajando un archivo de Drive');
   }
   async function downloadJSON(fileId) { return JSON.parse(await (await download(fileId)).text()); }
   const jsonBlob = o => new Blob([JSON.stringify(o)], { type: 'application/json' });
@@ -393,11 +411,14 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     let q = `'${esc(P.datosId)}' in parents and trashed=false`;
     if (since) q += ` and modifiedTime > '${since}'`;
     const files = await listAll(q);
+    if (!st.lastPull) log(`En Drive: ${files.filter(f => f.appProperties && f.appProperties.mosaicoRole === 'item').length} publicaciones`);
     let maxT = st.lastPull || 0;
+    const total = files.length; let n = 0;
     let orderFile = null;
     const local = new Map(app.listItems().map(it => [it.id, it]));
     const deleted = new Set(app.getOrderState().deleted);
     for (const f of files) {
+      n++;
       maxT = Math.max(maxT, Date.parse(f.modifiedTime));
       const role = f.appProperties && f.appProperties.mosaicoRole;
       if (role === 'orden' || f.name === 'orden.json') { orderFile = f; continue; }
@@ -407,17 +428,18 @@ window.createMosaicoSync = function createMosaicoSync(app) {
       const it = local.get(id);
       if (it && it.sync && it.sync.dirty) continue;              // mis cambios pendientes ganan
       let doc;
-      try { doc = await downloadJSON(f.id); } catch (e) { if (e instanceof AuthError || e.offline) throw e; console.warn(e); continue; }
+      try { doc = await downloadJSON(f.id); } catch (e) { if (e instanceof AuthError || e.offline) throw e; log('No se pudo leer ' + f.name + ': ' + e.message); continue; }
       if (it && it.sync && it.sync.remoteUpdatedAt === doc.updatedAt) continue;   // es mi propio cambio
       const syncInfo = { project: P.id, jsonId: f.id, media: doc.media || {}, mediaRev: doc.mediaRev || 0, dirty: false, mediaDirty: false, remoteUpdatedAt: doc.updatedAt };
       if (!it) {
-        setPhase('syncing', 'Bajando ' + doc.name);
-        const thumb = await download(doc.media.thumb);
-        await app.addRemoteItem({ ...metaFields(doc), sync: syncInfo }, thumb);
+        setPhase('syncing', `Bajando ${n} de ${total} · ${doc.name}`);
+        if (!doc.media || !doc.media.thumb) { log('Sin miniatura todavía: ' + doc.name); continue; }
+        const thumb = await download(doc.media.thumb, 60000);
+        await withTimeout(app.addRemoteItem({ ...metaFields(doc), sync: syncInfo }, thumb), 30000, 'guardando ' + doc.name + ' en el teléfono');
       } else {
         const mediaChanged = (doc.mediaRev || 0) > ((it.sync && it.sync.mediaRev) || 0) || !it.sync;
-        const thumb = mediaChanged ? await download(doc.media.thumb) : null;
-        await app.updateRemoteItem(it, { ...metaFields(doc), sync: syncInfo }, thumb);
+        const thumb = mediaChanged ? await download(doc.media.thumb, 60000) : null;
+        await withTimeout(app.updateRemoteItem(it, { ...metaFields(doc), sync: syncInfo }, thumb), 30000, 'actualizando ' + doc.name);
       }
     }
     if (orderFile || !st.lastPull) {
@@ -445,10 +467,12 @@ window.createMosaicoSync = function createMosaicoSync(app) {
       const pending = app.listItems().filter(it => !it.sync || it.sync.project !== st.project.id || it.sync.dirty || it.sync.mediaDirty || (it.kind === 'video' && !(it.sync.media || {}).video));
       // primero fotos y datos, los videos pesados al final
       pending.sort((a, b) => (a.kind === 'video') - (b.kind === 'video'));
+      if (pending.length) log(`Para subir: ${pending.length}`);
       for (const it of pending) { await pushItem(it); }
       if (app.getOrderState().dirty) await pushOrder();
       // 2) traer lo de las demás
       await pull();
+      if (st.phase !== 'idle' || !st.lastLoggedIdle) { log('Al día'); st.lastLoggedIdle = true; }
       setPhase('idle', 'Sincronizado');
     } catch (e) {
       console.error(e);
