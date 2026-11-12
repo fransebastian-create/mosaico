@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.0';
+  const VERSION = 'v1.0.1';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1238,7 +1238,7 @@
     },
     async updateRemoteItem(it, m, thumbBlob) {
       const wasT = it.t;
-      Object.assign(it, { name: m.name, w: m.w, h: m.h, crop: { rot: 0, ...m.crop }, adj: { ...zeroAdj(), ...m.adj }, texts: m.texts || [], kind: m.kind, duration: m.duration, t: m.t, sync: m.sync });
+      Object.assign(it, { name: m.name, w: m.w, h: m.h, crop: { rot: 0, ...m.crop }, adj: { ...zeroAdj(), ...m.adj }, texts: m.texts !== undefined ? m.texts : (it.texts || []), kind: m.kind, duration: m.duration, t: m.t, sync: m.sync });
       if (thumbBlob) {
         it.thumb = await loadImage(thumbBlob);
         await saveLocalSafe(() => DB.put('blobs', { id: it.id, thumb: thumbBlob }));   // cambió la portada: el original viejo ya no sirve
