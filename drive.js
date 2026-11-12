@@ -268,7 +268,9 @@ window.createMosaicoSync = function createMosaicoSync(app) {
   async function download(fileId, ms = 120000) {
     return withTimeout((async () => {
       const res = await api('GET', '/files/' + fileId, { query: { alt: 'media', supportsAllDrives: true }, raw: true });
-      return res.blob();
+      // Copia "en memoria": en iPhone guardar en la base local un Blob que viene directo de la red puede colgarse.
+      const type = (res.headers.get('Content-Type') || '').split(';')[0] || 'application/octet-stream';
+      return new Blob([await res.arrayBuffer()], { type });
     })(), ms, 'bajando un archivo de Drive');
   }
   async function downloadJSON(fileId) { return JSON.parse(await (await download(fileId)).text()); }

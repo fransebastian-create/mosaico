@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v0.9.1';
+  const VERSION = 'v0.9.2';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1148,6 +1148,16 @@
     DB.remove(id).catch(reportError);
   }
   // Lo que el módulo de sincronización necesita de la app.
+  let storageWarned = false;
+  async function saveLocalSafe(fn) {
+    let t;
+    try { await Promise.race([fn(), new Promise((_, rej) => { t = setTimeout(() => rej(new Error('tiempo agotado')), 10000); })]); return true; }
+    catch (e) {
+      console.warn('no se pudo guardar en el dispositivo', e);
+      if (!storageWarned) { storageWarned = true; toast('Este navegador no deja guardar las fotos en el teléfono (¿navegación privada?). Se ven igual, pero hay que bajarlas cada vez.', false, 9000); }
+      return false;
+    } finally { clearTimeout(t); }
+  }
   const appApi = {
     listItems: () => [...S.items.values()],
     getBlobs: id => DB.get('blobs', id),
@@ -1167,23 +1177,24 @@
     },
     async addRemoteItem(m, thumbBlob) {
       if (S.items.has(m.id) || S.deleted.has(m.id)) return;
-      await DB.put('blobs', { id: m.id, thumb: thumbBlob });   // el original se baja al abrirla
       const it = { ...m, adj: { ...zeroAdj(), ...m.adj }, crop: { rot: 0, ...m.crop } };
       it.thumb = await loadImage(thumbBlob);
-      await DB.put('items', meta(it));
       S.items.set(it.id, it);
       if (!S.order.includes(it.id)) S.order.unshift(it.id);
       renderGridSoon();
+      // Guardar en el teléfono; si el navegador no deja (p. ej. navegación privada), se sigue igual en memoria.
+      await saveLocalSafe(() => DB.put('blobs', { id: m.id, thumb: thumbBlob }));   // el original se baja al abrirla
+      await saveLocalSafe(() => DB.put('items', meta(it)));
     },
     async updateRemoteItem(it, m, thumbBlob) {
       const wasT = it.t;
       Object.assign(it, { name: m.name, w: m.w, h: m.h, crop: { rot: 0, ...m.crop }, adj: { ...zeroAdj(), ...m.adj }, kind: m.kind, duration: m.duration, t: m.t, sync: m.sync });
       if (thumbBlob) {
-        await DB.put('blobs', { id: it.id, thumb: thumbBlob });   // cambió la portada: el original viejo ya no sirve
         it.thumb = await loadImage(thumbBlob);
+        await saveLocalSafe(() => DB.put('blobs', { id: it.id, thumb: thumbBlob }));   // cambió la portada: el original viejo ya no sirve
         if (S.full && S.full.id === it.id) S.full = null;
       }
-      await DB.put('items', meta(it));
+      await saveLocalSafe(() => DB.put('items', meta(it)));
       drawThumb(it);
       if (S.current === it) {
         syncControls(); updateTitle();
