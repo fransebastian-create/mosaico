@@ -372,3 +372,25 @@ body.text-mode .tools > :not(#textPanel) { display: none; }
 .tsnap.v { left: calc(50% - .5px); top: 0; bottom: 0; width: 1px; }
 .tsnap.h { top: calc(50% - .5px); left: 0; right: 0; height: 1px; }
 .tsnap.on { opacity: 1; }
+
+/* selector de color propio */
+.cpick { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.cpick[hidden] { display: none; }
+.cp-sv {
+  position: relative; height: 150px; border-radius: 8px; touch-action: none; cursor: crosshair;
+  background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--hue, red));
+}
+.cp-hue {
+  position: relative; height: 22px; border-radius: 11px; touch-action: none; cursor: pointer;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+.cp-dot, .cp-hdot {
+  position: absolute; width: 20px; height: 20px; border-radius: 50%; transform: translate(-50%, -50%);
+  border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 1px 4px rgba(0,0,0,.4); pointer-events: none;
+}
+.cp-hdot { top: 50%; }
+.cp-row { display: flex; align-items: center; gap: 8px; }
+.cp-prev { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); flex: none; }
+.cp-hex { flex: 1; min-width: 0; font: inherit; font-size: 15px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font-family: ui-monospace, Menlo, monospace; }
+.cbtn { width: 44px; height: 28px; border-radius: 8px; border: 1px solid var(--line); cursor: pointer; padding: 0; }
+.tp-head .chip[hidden] { display: none; }

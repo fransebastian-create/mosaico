@@ -243,7 +243,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     const it = S.current, L = cur(); if (!L) return;
     const a = it.texts, i = a.indexOf(L), j = clamp(i + dir, 0, a.length - 1);
     if (i === j) return;
-    a.splice(i, 1); a.splice(j, 0, L); changed();
+    a.splice(i, 1); a.splice(j, 0, L); changed(); syncPanel();
+    toast(dir > 0 ? (j === a.length - 1 ? 'Este texto quedó encima de todos' : 'Subió un lugar') : (j === 0 ? 'Este texto quedó debajo de todos' : 'Bajó un lugar'));
   }
 
   // ---- recuadro de selección y guías ----
@@ -432,8 +433,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     <div class="row tp-head">
       <button class="chip" data-t="done">‹ Listo</button>
       <button class="chip" data-t="dup">Duplicar</button>
-      <button class="chip" data-t="front" title="Traer adelante">Adelante</button>
-      <button class="chip" data-t="back" title="Mandar atrás">Atrás</button>
+      <button class="chip" data-t="front" title="Poner este texto por encima de los otros textos">Al frente</button>
+      <button class="chip" data-t="back" title="Poner este texto por debajo de los otros textos">Al fondo</button>
       <button class="chip danger" data-t="del">Borrar</button>
     </div>
     <textarea id="tText" rows="2" placeholder="Escribí acá" autocapitalize="sentences" spellcheck="true"></textarea>
@@ -469,16 +470,75 @@ window.createMosaicoText = function createMosaicoText(A) {
     const inp = row.querySelector('input'), out = row.querySelector('output');
     inp.addEventListener('input', () => { const L = cur(); if (!L) return; set(L, +inp.value); out.textContent = fmt(+inp.value); changed(); });
     refreshers.push(L => { const v = get(L); inp.value = v; out.textContent = fmt(v); });
+    A.onDoubleTap(row, () => {   // volver al valor de fábrica
+      const L = cur(); if (!L) return;
+      const v = get(clone(DEFAULT)); set(L, v); inp.value = v; out.textContent = fmt(v); changed();
+    });
     parent.append(row);
     return row;
   }
+  // ---- selector de color: se arrastra el dedo por el cuadro y la barra, y el texto cambia en vivo ----
+  const toHex = (r, g, b) => '#' + [r, g, b].map(v => Math.round(clamp(v, 0, 255)).toString(16).padStart(2, '0')).join('');
+  function hsv2hex(h, sat, v) {
+    const f = n => { const k = (n + h / 60) % 6; return v - v * sat * Math.max(0, Math.min(k, 4 - k, 1)); };
+    return toHex(f(5) * 255, f(3) * 255, f(1) * 255);
+  }
+  function hex2hsv(hex) {
+    const n = parseInt((hex || '#ffffff').slice(1), 16), r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    let h = 0;
+    if (d) h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return { h: h * 60, s: mx ? d / mx : 0, v: mx };
+  }
+  function makePicker({ get, set, commit, onOpen }) {
+    const el = document.createElement('div'); el.className = 'cpick'; el.hidden = true;
+    el.innerHTML = `<div class="cp-sv"><div class="cp-dot"></div></div><div class="cp-hue"><div class="cp-hdot"></div></div>
+      <div class="cp-row"><span class="cp-prev"></span><input class="cp-hex" maxlength="7" spellcheck="false" aria-label="Código de color"><button class="chip cp-ok">Listo</button></div>`;
+    const sv = el.querySelector('.cp-sv'), dot = el.querySelector('.cp-dot'), hue = el.querySelector('.cp-hue'), hdot = el.querySelector('.cp-hdot');
+    const prev = el.querySelector('.cp-prev'), hexIn = el.querySelector('.cp-hex');
+    let hsv = { h: 0, s: 0, v: 1 };
+    function paint() {
+      sv.style.setProperty('--hue', `hsl(${hsv.h} 100% 50%)`);
+      dot.style.left = hsv.s * 100 + '%'; dot.style.top = (1 - hsv.v) * 100 + '%';
+      hdot.style.left = hsv.h / 360 * 100 + '%';
+      const hex = hsv2hex(hsv.h, hsv.s, hsv.v);
+      prev.style.background = hex;
+      if (document.activeElement !== hexIn) hexIn.value = hex;
+      return hex;
+    }
+    function apply() { const L = cur(); if (!L) return; set(L, paint()); changed(); }
+    function drag(target, onPos) {
+      target.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        try { target.setPointerCapture(e.pointerId); } catch { }
+        const move = ev => { const r = target.getBoundingClientRect(); onPos(clamp((ev.clientX - r.left) / r.width, 0, 1), clamp((ev.clientY - r.top) / r.height, 0, 1)); apply(); };
+        const up = () => { target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', up); target.removeEventListener('pointercancel', up); commit && commit(paint()); };
+        target.addEventListener('pointermove', move); target.addEventListener('pointerup', up); target.addEventListener('pointercancel', up);
+        move(e);
+      });
+    }
+    drag(sv, (x, y) => { hsv.s = x; hsv.v = 1 - y; });
+    drag(hue, x => { hsv.h = x * 359.9; if (hsv.s < 0.05) hsv.s = 1; if (hsv.v < 0.05) hsv.v = 1; });
+    hexIn.addEventListener('input', () => {
+      if (!/^#[0-9a-f]{6}$/i.test(hexIn.value)) return;
+      hsv = hex2hsv(hexIn.value); apply();
+    });
+    hexIn.addEventListener('change', () => commit && commit(paint()));
+    el.querySelector('.cp-ok').addEventListener('click', () => { el.hidden = true; });
+    return {
+      el,
+      toggle() { el.hidden = !el.hidden; if (!el.hidden) { onOpen && onOpen(); this.refresh(); } },
+      refresh() { const L = cur(); if (!L || el.hidden) return; const now = hex2hsv(get(L)); if (hsv2hex(hsv.h, hsv.s, hsv.v) !== get(L).toLowerCase()) hsv = now; paint(); },
+    };
+  }
   function colorInput(parent, { label, get, set }) {
-    const l = document.createElement('label'); l.className = 'tp-color';
-    l.innerHTML = `<span>${label}</span><input type="color">`;
-    const inp = l.querySelector('input');
-    inp.addEventListener('input', () => { const L = cur(); if (!L) return; set(L, inp.value); changed(); });
-    refreshers.push(L => { inp.value = get(L); });
-    parent.append(l);
+    const row = document.createElement('div'); row.className = 'tp-color';
+    row.innerHTML = `<span>${label}</span><button class="cbtn" title="Elegir color"></button>`;
+    const btn = row.querySelector('.cbtn');
+    const pk = makePicker({ get, set });
+    btn.addEventListener('click', () => pk.toggle());
+    refreshers.push(L => { btn.style.background = get(L); pk.refresh(); });
+    parent.append(row, pk.el);
   }
   function section(el, { label, key, build }) {
     el.innerHTML = `<button class="chip tp-toggle">${label}</button><div class="tp-body"></div>`;
@@ -574,17 +634,25 @@ window.createMosaicoText = function createMosaicoText(A) {
     const L = cur(), now = L ? (L.color || '#ffffff').toLowerCase() : '';
     const list = [...new Set([...BASE_COLORS, ...lib.palette.map(c => c.toLowerCase())])];
     colorsEl.innerHTML = list.map(c => `<button class="sw${c === now ? ' on' : ''}" data-c="${c}" style="--c:${c}" title="${c}"></button>`).join('')
-      + `<label class="sw pick" title="Otro color"><input type="color" value="${now || '#ffffff'}"></label>`;
+      + `<button class="sw pick" title="Elegir otro color (arrastrá para ver en vivo)"></button>`;
   }
+  let pickAdded = null;   // color agregado a la paleta en esta apertura del selector (se reemplaza, no se acumula)
+  const textPicker = makePicker({
+    get: L => L.color || '#ffffff',
+    set: (L, c) => { L.color = c; },
+    onOpen: () => { pickAdded = null; },
+    commit: c => {   // al soltar, el color queda en la paleta compartida
+      c = c.toLowerCase();
+      if (!BASE_COLORS.includes(c)) { lib.palette = [c, ...lib.palette.filter(x => x !== c && x !== pickAdded)].slice(0, 12); pickAdded = c; libChanged(); }
+      else renderSwatches();
+    },
+  });
+  colorsEl.after(textPicker.el);
+  refreshers.push(() => textPicker.refresh());
   colorsEl.addEventListener('click', e => {
     const b = e.target.closest('button.sw'); const L = cur(); if (!b || !L) return;
-    L.color = b.dataset.c; changed(); renderSwatches();
-  });
-  colorsEl.addEventListener('input', e => { const L = cur(); if (!L || e.target.type !== 'color') return; L.color = e.target.value; changed(); });
-  colorsEl.addEventListener('change', e => {   // al soltar el selector, el color queda en la paleta compartida
-    if (e.target.type !== 'color') return;
-    const c = e.target.value.toLowerCase();
-    if (!BASE_COLORS.includes(c)) { lib.palette = [c, ...lib.palette.filter(x => x !== c)].slice(0, 12); libChanged(); }
+    if (b.classList.contains('pick')) { textPicker.toggle(); return; }
+    L.color = b.dataset.c; changed(); renderSwatches(); textPicker.refresh();
   });
   refreshers.push(() => renderSwatches());
   // estilos guardados
@@ -626,6 +694,10 @@ window.createMosaicoText = function createMosaicoText(A) {
     const L = cur();
     if (!L) return;
     for (const r of refreshers) r(L);
+    const ts = S.current.texts, i = ts.indexOf(L);
+    const fr = panel.querySelector('[data-t="front"]'), bk = panel.querySelector('[data-t="back"]');
+    fr.hidden = bk.hidden = ts.length < 2;
+    fr.disabled = i === ts.length - 1; bk.disabled = i === 0;
   }
   // sólo los valores que cambian con gestos (más liviano)
   let svRaf = 0;

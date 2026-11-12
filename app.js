@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.0.2';
+  const VERSION = 'v1.1';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -28,6 +28,17 @@
   const ua = navigator.userAgent;
   const isIOS = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/i.test(ua);
+  // Doble clic (compu) o doble toque (celular, donde el navegador no avisa doble clic en los controles).
+  function onDoubleTap(el, fn) {
+    let last = null;
+    el.addEventListener('dblclick', e => { e.preventDefault(); fn(); last = null; });
+    el.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse') return;
+      const now = Date.now();
+      if (last && now - last.t < 380 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) { last = null; fn(); }
+      else last = { t: now, x: e.clientX, y: e.clientY };
+    });
+  }
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 
   // ================= Almacenamiento local (IndexedDB) =================
@@ -404,7 +415,7 @@
 
   // ---- textos ----
   const T = window.createMosaicoText({
-    S, ASPECT, frame, clamp, rad, snapRot, normRot, uid, toast: (...a) => toast(...a), DB,
+    S, ASPECT, frame, clamp, rad, snapRot, normRot, uid, toast: (...a) => toast(...a), DB, onDoubleTap,
     saveItem: it => saveItem(it), requestRender: () => requestRender(),
     redrawAll: () => { S.order.forEach(id => drawThumb(S.items.get(id))); requestRender(); },
     kickSync: () => Sync && Sync.kick(), trashFile: id => Sync && Sync.trashFile(id),
@@ -927,8 +938,12 @@
     if (!S.current) return;
     setRotation(base90(S.current.crop.rot || 0) + (+rotInput.value));
   });
-  rotInput.addEventListener('dblclick', () => S.current && setRotation(base90(S.current.crop.rot || 0)));
-  $('#rotOut').closest('label').addEventListener('dblclick', () => S.current && setRotation(base90(S.current.crop.rot || 0)));
+  onDoubleTap($('#rotOut').closest('.slider'), () => S.current && setRotation(base90(S.current.crop.rot || 0)));
+  onDoubleTap(zoomInput.closest('.slider'), () => {
+    if (!S.current) return;
+    const [cx, cy, rect] = frameCenter();
+    zoomAt(cx, cy, 1 / S.current.crop.z, rect); cropChanged();
+  });
   $('#rotL').addEventListener('click', () => S.current && setRotation((S.current.crop.rot || 0) - 90));
   $('#rotR').addEventListener('click', () => S.current && setRotation((S.current.crop.rot || 0) + 90));
 
@@ -959,8 +974,7 @@
       requestRender(); saveItem(S.current);
     });
     const reset = () => { inp.value = 0; inp.dispatchEvent(new Event('input')); };
-    row.querySelector('label').addEventListener('dblclick', reset);
-    inp.addEventListener('dblclick', reset);
+    onDoubleTap(row, reset);
     sliderUI[a.key] = { inp, out };
     $('#sliders').append(row);
   }
