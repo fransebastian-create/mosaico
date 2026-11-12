@@ -394,3 +394,18 @@ body.text-mode .tools > :not(#textPanel) { display: none; }
 .cp-hex { flex: 1; min-width: 0; font: inherit; font-size: 15px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font-family: ui-monospace, Menlo, monospace; }
 .cbtn { width: 44px; height: 28px; border-radius: 8px; border: 1px solid var(--line); cursor: pointer; padding: 0; }
 .tp-head .chip[hidden] { display: none; }
+
+/* ---------- proyectos ---------- */
+.projbtn {
+  appearance: none; border: 0; background: transparent; color: inherit; font: inherit; padding: 0; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0;
+}
+#projName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projbtn .caret { font-size: .7em; color: var(--muted); flex: none; }
+.prow.cur { border-color: var(--ink); }
+.prow .pw {
+  appearance: none; border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; padding: 0;
+}
+.prow .pw b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#projSheet .cloud-card .row .btn { flex: 1; justify-content: center; }

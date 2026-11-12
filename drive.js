@@ -20,7 +20,8 @@ window.createMosaicoSync = function createMosaicoSync(app) {
   const POLL_MS = 6000;
   const PUSH_DELAY = 1500;
   const CHUNK = 8 * 1024 * 1024;   // subida en partes de 8 MB (múltiplo de 256 KB, como pide Drive)
-  const LS_TOKEN = 'mosaico.token', LS_PROJECT = 'mosaico.project', LS_USER = 'mosaico.user';
+  const WSID = app.workspaceId || 'principal';   // cada proyecto del dispositivo guarda su conexión aparte
+  const LS_TOKEN = 'mosaico.token', LS_PROJECT = 'mosaico.project.' + WSID, LS_USER = 'mosaico.user';
 
   const ls = {
     get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
@@ -138,8 +139,8 @@ window.createMosaicoSync = function createMosaicoSync(app) {
   }
   function signOut() {
     if (st.token && window.google && google.accounts) { try { google.accounts.oauth2.revoke(st.token.access_token, () => { }); } catch { } }
-    st.token = null; st.user = null; st.project = null;
-    ls.set(LS_TOKEN, null); ls.set(LS_USER, null); ls.set(LS_PROJECT, null);
+    st.token = null; st.user = null;
+    ls.set(LS_TOKEN, null); ls.set(LS_USER, null);   // el proyecto queda: al volver a conectar sigue sincronizando
     stop(); setPhase('idle');
   }
   const hasToken = () => st.token && st.token.expires_at > Date.now();
@@ -307,6 +308,11 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     await app.onProjectChanged(p.id);
     emit(); start(); kick(0);
     return p;
+  }
+  async function renameProject(name) {
+    if (!st.project) return;
+    await api('PATCH', '/files/' + st.project.id, { query: { supportsAllDrives: true }, body: { name } });
+    st.project.name = name; ls.set(LS_PROJECT, st.project); emit();
   }
   function leaveProject() { st.project = null; ls.set(LS_PROJECT, null); stop(); setPhase('idle'); }
   async function share(email) {
@@ -507,7 +513,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
   // Una sola pestaña sincroniza a la vez (evita subir lo mismo dos veces).
   function cycle() {
     if (st.running || !st.project) return;
-    if (navigator.locks && navigator.locks.request) return navigator.locks.request('mosaico-sync', { ifAvailable: true }, lock => lock ? cycleInner() : null);
+    if (navigator.locks && navigator.locks.request) return navigator.locks.request('mosaico-sync-' + WSID, { ifAvailable: true }, lock => lock ? cycleInner() : null);
     return cycleInner();
   }
   async function cycleInner() {
@@ -571,7 +577,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
 
   return {
     state, onChange(f) { st.listeners.add(f); f(state()); return () => st.listeners.delete(f); },
-    signIn, signOut, findProjects, createProject, openProject, leaveProject, share, folderUrl,
+    signIn, signOut, findProjects, createProject, openProject, leaveProject, renameProject, share, folderUrl,
     kick, fetchMedia, trashItem, syncNow: () => kick(0),
     trashFile: id => { if (hasToken()) trash(id); },
     fromRedirect: back ? (back.error || 'ok') : null,   // volvimos recién de Google (celulares)

@@ -9,13 +9,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Inter:wght@400;700&family=Playfair+Display:ital@0;1&display=swap">
-<link rel="stylesheet" href="styles.css?v=1.1">
+<link rel="stylesheet" href="styles.css?v=1.2">
 </head>
 <body>
 <div id="app">
   <section id="gridPane">
     <header class="bar">
-      <h1>Mosaico</h1>
+      <h1><button id="projBtn" class="projbtn" title="Cambiar de proyecto"><span id="projName">Mosaico</span><span class="caret">▾</span></button></h1>
       <div class="bar-actions">
         <button id="viewToggle" class="chip" title="Proporción de las miniaturas en la grilla">3:4</button>
         <button id="origToggle" class="chip" title="Ver la grilla sin ajustes de color">Originales</button>
@@ -107,6 +107,14 @@
     <button id="cloudClose" class="chip">Cerrar</button>
   </div>
 </div>
+<div id="projSheet" class="sheet" hidden>
+  <div class="sheet-card cloud-card">
+    <h2>Proyectos</h2>
+    <p class="muted small">Cada proyecto es una grilla aparte (por ejemplo, una por cuenta de Instagram). En la compu podés abrir dos a la vez en pestañas distintas.</p>
+    <div id="projBody"></div>
+    <button id="projClose" class="chip">Cerrar</button>
+  </div>
+</div>
 <div id="choiceSheet" class="sheet" hidden>
   <div class="sheet-card">
     <p><strong>¿Qué querés pegar?</strong></p>
@@ -122,9 +130,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="config.js?v=1.1"></script>
-<script src="drive.js?v=1.1"></script>
-<script src="texto.js?v=1.1"></script>
-<script src="app.js?v=1.1"></script>
+<script src="config.js?v=1.2"></script>
+<script src="drive.js?v=1.2"></script>
+<script src="texto.js?v=1.2"></script>
+<script src="app.js?v=1.2"></script>
 </body>
 </html>

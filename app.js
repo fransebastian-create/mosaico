@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.1';
+  const VERSION = 'v1.2';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -41,12 +41,48 @@
   }
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 
+  // ================= Proyectos en este dispositivo =================
+  // Cada proyecto tiene su propia memoria local (base de datos aparte), así las grillas no se mezclan.
+  // La pestaña recuerda su proyecto en la dirección (?p=…), así se pueden tener dos abiertos a la vez.
+  const WS = (() => {
+    const get = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+    const set = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch { } };
+    let list = get('mosaico.workspaces');
+    if (!Array.isArray(list) || !list.length) {
+      // primera vez con proyectos: lo que ya había pasa a ser el proyecto principal
+      const old = get('mosaico.project');
+      list = [{ id: 'principal', name: (old && old.name) || 'Mi grilla', db: 'mosaico' }];
+      if (old) { set('mosaico.project.principal', old); set('mosaico.project', null); }
+      set('mosaico.workspaces', list);
+    }
+    // proyectos que se pidió quitar mientras estaban abiertos
+    for (const db of get('mosaico.pendingDelete') || []) { try { indexedDB.deleteDatabase(db); } catch { } }
+    set('mosaico.pendingDelete', null);
+    const urlP = new URLSearchParams(location.search).get('p');
+    const cur = list.find(w => w.id === urlP) || list.find(w => w.id === get('mosaico.current')) || list[0];
+    set('mosaico.current', cur.id);
+    if (urlP !== cur.id) { const u = new URL(location.href); u.searchParams.set('p', cur.id); history.replaceState(null, '', u); }
+    return {
+      list, cur, get, set,
+      save() { set('mosaico.workspaces', list); },
+      project: w => get('mosaico.project.' + w.id),
+      url: id => { const u = new URL(location.href); u.search = ''; u.hash = ''; u.searchParams.set('p', id); return u.href; },
+      go(id) { set('mosaico.current', id); location.href = this.url(id); },
+      create(name) {
+        const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const w = { id, name, db: 'mosaico-' + id };
+        list.push(w); this.save();
+        return w;
+      },
+    };
+  })();
+
   // ================= Almacenamiento local (IndexedDB) =================
   const DB = {
     _p: null,
     open() {
       return this._p ||= new Promise((res, rej) => {
-        const r = indexedDB.open('mosaico', 3);
+        const r = indexedDB.open(WS.cur.db, 3);
         r.onblocked = () => toast('Cerrá las otras pestañas de Mosaico y recargá esta (hay una versión nueva).', true);
         r.onupgradeneeded = () => {
           const d = r.result;
@@ -1223,6 +1259,7 @@
     } finally { clearTimeout(t); }
   }
   const appApi = {
+    workspaceId: WS.cur.id,
     listItems: () => [...S.items.values()],
     getBlobs: id => DB.get('blobs', id),
     getVideo: async id => { const r = await DB.get('videos', id); return r && r.video; },
@@ -1305,9 +1342,9 @@
            <button class="btn primary" data-act="signin">Conectar con Google</button>`;
     } else if (!st.project) {
       const findBtn = `<button class="btn${n ? '' : ' primary'}" data-act="find">Abrir un proyecto que ya existe</button>
-        <p class="muted small">Tuyo o compartido con vos: se baja la grilla a este dispositivo.</p>`;
+        <p class="muted small">Tuyo o compartido con vos: ${n ? 'se abre como un proyecto aparte, sin mezclarse con esta grilla.' : 'se baja la grilla a este dispositivo.'}</p>`;
       const createBtn = `<button class="btn${n ? ' primary' : ''}" data-act="create">Crear proyecto nuevo en mi Drive</button>
-        <p class="muted small">${n ? `Se suben las ${n} publicaciones que hay en este dispositivo.` : 'Se crea una carpeta “Mosaico” en tu Drive.'}</p>`;
+        <p class="muted small">${n ? `Se suben las ${n} publicaciones de “${escHtml(WS.cur.name)}”.` : `Se crea la carpeta “${escHtml(WS.cur.name)}” en tu Drive.`}</p>`;
       h = `<p class="muted">Cuenta: <b>${escHtml(st.user && st.user.email)}</b></p>` + (n ? createBtn + findBtn : findBtn + createBtn);
       if (foundProjects) {
         h += foundProjects.length
@@ -1326,7 +1363,6 @@
           <a class="chip" href="${escHtml(Sync.folderUrl())}" target="_blank" rel="noopener">Ver carpeta en Drive</a>
         </div>
         <div class="row">
-          <button class="chip" data-act="leave">Usar otro proyecto</button>
           <button class="chip" data-act="signout">Cerrar sesión de Google</button>
         </div>`;
     }
@@ -1343,24 +1379,141 @@
     };
     if (act === 'signin') return run('Esperando a Google…', () => Sync.signIn());
     if (act === 'signout') { if (confirm('¿Cerrar la sesión de Google en este dispositivo? Lo que ya está en Drive no se toca.')) { Sync.signOut(); foundProjects = null; renderCloud(Sync.state()); } return; }
-    if (act === 'create') return run('Creando la carpeta en tu Drive…', () => Sync.createProject('Mosaico'));
+    if (act === 'create') return run('Creando la carpeta en tu Drive…', () => Sync.createProject(WS.cur.name));
     if (act === 'find') return run('Buscando proyectos…', async () => { foundProjects = await Sync.findProjects(); });
     if (act === 'open') {
       const p = (foundProjects || []).find(x => x.id === el.dataset.id);
-      return run('Abriendo el proyecto…', () => Sync.openProject(p));
+      return run('Abriendo el proyecto…', () => openCloudProject(p));
     }
     if (act === 'sync') { Sync.syncNow(); return; }
+    if (act === 'openPending') return run('Abriendo “' + el.p.name + '”…', () => Sync.openProject(el.p));
     if (act === 'leave') {
       if (confirm('¿Dejar de sincronizar este proyecto en este dispositivo? No se borra nada.')) { Sync.leaveProject(); foundProjects = null; renderCloud(Sync.state()); }
       return;
     }
   }
+  // Abrir un proyecto de Drive sin mezclar grillas: si este proyecto ya tiene fotos, va a uno nuevo.
+  async function openCloudProject(p) {
+    if (!p) return;
+    const here = WS.list.find(w => { const q = w.id === WS.cur.id ? Sync.state().project : WS.project(w); return q && q.id === p.id; });
+    if (here) { if (here.id !== WS.cur.id) await goWorkspace(here.id); return; }
+    if (!S.order.length && !Sync.state().project) {
+      await Sync.openProject(p);
+      WS.cur.name = p.name; WS.save(); projLabel();
+      return;
+    }
+    const w = WS.create(p.name);
+    WS.set('mosaico.pendingOpen.' + w.id, p);
+    await goWorkspace(w.id);
+  }
+  async function flushSaves() {
+    const waits = [];
+    for (const [id, t] of saveTimers) { clearTimeout(t); const it = S.items.get(id); if (it) waits.push(DB.put('items', meta(it)).catch(() => { })); }
+    saveTimers.clear();
+    if (S.video) waits.push(flushFrame(S.video).catch(() => { }));
+    await Promise.all(waits);
+  }
+  async function goWorkspace(id) { await flushSaves(); WS.go(id); }
+
+  // ---- menú de proyectos ----
+  const projSheet = $('#projSheet'), projBody = $('#projBody');
+  let projFound = null, projBusy = '';
+  function projLabel() {
+    $('#projName').textContent = WS.cur.name;
+    document.title = WS.list.length > 1 ? `${WS.cur.name} · Mosaico` : 'Mosaico';
+  }
+  function renderProjects() {
+    if (projSheet.hidden) return;
+    const st = Sync ? Sync.state() : {};
+    const projOf = w => w.id === WS.cur.id ? (st.project || WS.project(w)) : WS.project(w);
+    let h = `<div class="plist">${WS.list.map(w => {
+      const p = projOf(w), cur = w.id === WS.cur.id;
+      const sub = p ? `☁︎ En Drive${p.owner ? ' · de ' + escHtml(p.owner) : ''}` : 'Sólo en este dispositivo';
+      return `<div class="prow${cur ? ' cur' : ''}">
+        <button class="pw" data-pact="go" data-id="${w.id}"><b>${escHtml(w.name)}</b><span class="muted small">${sub}</span></button>
+        ${cur ? '<span class="muted small">abierto</span>' : (isNarrow() ? '' : `<a class="chip" href="${escHtml(WS.url(w.id))}" target="_blank" rel="noopener" title="Abrir en otra pestaña">↗</a>`)}
+      </div>`;
+    }).join('')}</div>
+      <div class="row"><button class="btn primary" data-pact="new">+ Proyecto nuevo</button><button class="btn" data-pact="find">Abrir uno de la nube</button></div>`;
+    if (projFound) {
+      h += projFound.length
+        ? `<p class="muted small">En tu Drive y compartidos con vos:</p><div class="plist">${projFound.map(p => {
+            const has = WS.list.find(w => { const q = projOf(w); return q && q.id === p.id; });
+            return `<div class="prow"><span><b>${escHtml(p.name)}</b><br><span class="muted small">de ${escHtml(p.owner)}</span></span><button class="btn${has ? '' : ' primary'}" data-pact="open" data-id="${escHtml(p.id)}">${has ? 'Ir' : 'Abrir'}</button></div>`;
+          }).join('')}</div>`
+        : `<p class="muted small">No encontré proyectos en tu Drive ni compartidos con vos.</p>`;
+    }
+    h += `<div class="row"><button class="chip" data-pact="rename">Renombrar “${escHtml(WS.cur.name)}”</button>${WS.list.length > 1 ? '<button class="chip danger" data-pact="remove">Quitar de este dispositivo</button>' : ''}</div>`;
+    if (projBusy) h = `<p class="muted">${escHtml(projBusy)}</p>`;
+    projBody.innerHTML = h;
+  }
+  async function projAction(act, el) {
+    const st = Sync ? Sync.state() : {};
+    const busy = async (label, fn) => {
+      projBusy = label; renderProjects();
+      try { await fn(); } catch (e) { console.error(e); toast(e.message || String(e), false, 7000); }
+      finally { projBusy = ''; renderProjects(); }
+    };
+    if (act === 'go') { if (el.dataset.id !== WS.cur.id) await goWorkspace(el.dataset.id); else projSheet.hidden = true; return; }
+    if (act === 'new') {
+      const name = (prompt('Nombre del proyecto nuevo (por ejemplo, el de la cuenta de Instagram)', '') || '').trim();
+      if (!name) return;
+      const w = WS.create(name);
+      if (st.signedIn) WS.set('mosaico.pendingCreate.' + w.id, true);   // se crea también en Drive al abrirlo
+      await goWorkspace(w.id);
+      return;
+    }
+    if (act === 'find') {
+      if (!st.signedIn) { projSheet.hidden = true; cloudSheet.hidden = false; renderCloud(Sync.state()); toast('Primero conectá Google'); return; }
+      return busy('Buscando proyectos…', async () => { projFound = await Sync.findProjects(); });
+    }
+    if (act === 'open') {
+      const p = (projFound || []).find(x => x.id === el.dataset.id);
+      return busy('Abriendo…', () => openCloudProject(p));
+    }
+    if (act === 'rename') {
+      const name = (prompt('Nuevo nombre del proyecto', WS.cur.name) || '').trim();
+      if (!name || name === WS.cur.name) return;
+      WS.cur.name = name; WS.save(); projLabel(); renderProjects();
+      if (st.project && st.signedIn) Sync.renameProject(name).catch(e => toast('No se pudo renombrar en Drive: ' + e.message, false, 6000));
+      return;
+    }
+    if (act === 'remove') {
+      const p = st.project;
+      const msg = p
+        ? `¿Quitar “${WS.cur.name}” de este dispositivo? En Drive queda todo, y lo podés volver a abrir cuando quieras.`
+        : (S.order.length ? `“${WS.cur.name}” no está en la nube: sus ${S.order.length} publicaciones se van a borrar de este dispositivo. ¿Seguro?` : `¿Quitar “${WS.cur.name}”?`);
+      if (!confirm(msg)) return;
+      const other = WS.list.find(w => w.id !== WS.cur.id);
+      WS.list.splice(WS.list.indexOf(WS.cur), 1); WS.save();
+      WS.set('mosaico.project.' + WS.cur.id, null);
+      WS.set('mosaico.pendingDelete', [...(WS.get('mosaico.pendingDelete') || []), WS.cur.db]);
+      WS.go(other.id);
+    }
+  }
+  $('#projBtn').addEventListener('click', () => { projFound = null; projSheet.hidden = false; renderProjects(); });
+  $('#projClose').addEventListener('click', () => { projSheet.hidden = true; });
+  projSheet.addEventListener('click', e => {
+    if (e.target === projSheet) { projSheet.hidden = true; return; }
+    const b = e.target.closest('[data-pact]');
+    if (b) { e.preventDefault(); projAction(b.dataset.pact, b); }
+  });
+  projLabel();
+
   cloudBtn.addEventListener('click', () => { if (!Sync) toast('La nube todavía está cargando. Si no responde, cerrá las otras pestañas de Mosaico y recargá.', false, 7000); });
   function startCloud() {
     if (Sync) return;
     if (!window.createMosaicoSync) { cloudBtn.hidden = true; return; }
     Sync = window.createMosaicoSync(appApi);
-    Sync.onChange(renderCloud);
+    Sync.onChange(st => { renderCloud(st); renderProjects(); });
+    const pendOpen = WS.get('mosaico.pendingOpen.' + WS.cur.id), pendCreate = WS.get('mosaico.pendingCreate.' + WS.cur.id);
+    if ((pendOpen || pendCreate) && !Sync.state().project) {
+      if (Sync.state().signedIn) {
+        WS.set('mosaico.pendingOpen.' + WS.cur.id, null); WS.set('mosaico.pendingCreate.' + WS.cur.id, null);
+        cloudSheet.hidden = false;
+        setTimeout(() => pendOpen ? cloudAction('openPending', { p: pendOpen }) : cloudAction('create'), 0);
+      } else if (pendOpen) toast('Conectá Google para bajar “' + pendOpen.name + '”', false, 6000);
+    }
     if (Sync.fromRedirect === 'ok' && !Sync.state().project) { cloudSheet.hidden = false; renderCloud(Sync.state()); }
     else if (Sync.fromRedirect && Sync.fromRedirect !== 'ok') toast('No se pudo conectar con Google: ' + Sync.fromRedirect, false, 8000);
     cloudBtn.addEventListener('click', () => {
