@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v0.9.2';
+  const VERSION = 'v1.0';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -35,7 +35,8 @@
     _p: null,
     open() {
       return this._p ||= new Promise((res, rej) => {
-        const r = indexedDB.open('mosaico', 2);
+        const r = indexedDB.open('mosaico', 3);
+        r.onblocked = () => toast('Cerrá las otras pestañas de Mosaico y recargá esta (hay una versión nueva).', true);
         r.onupgradeneeded = () => {
           const d = r.result;
           const mk = (n, o) => { if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, o); };
@@ -43,8 +44,9 @@
           mk('blobs', { keyPath: 'id' });   // fotograma/foto + miniatura (se reescribe seguido, es liviano)
           mk('videos', { keyPath: 'id' });  // video original (se escribe una sola vez)
           mk('meta');
+          mk('fonts', { keyPath: 'id' });   // tipografías propias
         };
-        r.onsuccess = () => res(r.result);
+        r.onsuccess = () => { const db = r.result; db.onversionchange = () => db.close(); res(db); };
         r.onerror = () => rej(r.error);
       });
     },
@@ -84,7 +86,8 @@
     orderDirty: false,
   };
 
-  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, kind: it.kind || 'image', duration: it.duration, t: it.t, sync: it.sync || null });
+  const cleanTexts = ts => (ts || []).map(({ _box, ...L }) => L);
+  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), kind: it.kind || 'image', duration: it.duration, t: it.t, sync: it.sync || null });
   let Sync = null;   // sincronización con Google Drive (drive.js)
   const saveTimers = new Map();
   function saveItem(it) {
@@ -399,6 +402,14 @@
   const zoomInput = $('#zoomInput'), zoomOut = $('#zoomOut');
   const pasteBtn = $('#pasteBtn'), pasteManyBtn = $('#pasteManyBtn');
 
+  // ---- textos ----
+  const T = window.createMosaicoText({
+    S, ASPECT, frame, clamp, rad, snapRot, normRot, uid, toast: (...a) => toast(...a), DB,
+    saveItem: it => saveItem(it), requestRender: () => requestRender(),
+    redrawAll: () => { S.order.forEach(id => drawThumb(S.items.get(id))); requestRender(); },
+    kickSync: () => Sync && Sync.kick(), trashFile: id => Sync && Sync.trashFile(id),
+  });
+
   let toastTimer;
   function toast(msg, sticky = false, ms = 2600) {
     const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -442,7 +453,9 @@
       S.showOriginalGrid ? null : it.adj, cw, ch, S.gridAspect);
     const c = it.canvas;
     if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
-    c.getContext('2d').drawImage(out, 0, 0);
+    const cx = c.getContext('2d');
+    cx.drawImage(out, 0, 0);
+    T.draw(cx, it, cw, ch);
   }
   function renderGrid() {
     gridEl.classList.toggle('a45', S.gridAspect === ASPECT);
@@ -610,6 +623,7 @@
       flushFrame(prev).finally(() => closeVideo(prev.v));
     }
     if (S.current && S.current.cell) S.current.cell.classList.remove('current');
+    if (S.current !== it) T.onItemChanged();
     S.current = it;
     it.cell && it.cell.classList.add('current');
     document.body.classList.add('has-current', 'editing');
@@ -746,6 +760,8 @@
     const s = source(it);
     const out = R.render(s.img, s.w, s.h, it.crop, S.holdBefore ? null : it.adj, pv.width, pv.height, ASPECT);
     pctx.drawImage(out, 0, 0);
+    T.draw(pctx, it, pv.width, pv.height);
+    T.afterPreview();
     const fw = baseF(it.w, it.h, it.crop.rot) / it.crop.z;
     $('#lowres').hidden = fw >= OUT_W * 0.75;
   }
@@ -809,12 +825,14 @@
   }
   frame.addEventListener('pointerdown', e => {
     if (!S.current) return;
+    if (T.pointerDown(e, ptrs.size > 0)) return;
     try { frame.setPointerCapture(e.pointerId); } catch { }
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (ptrs.size === 2) twist = makeTwist();
     frame.classList.add('dragging');
   });
   frame.addEventListener('pointermove', e => {
+    if (T.pointerMove(e)) return;
     if (!ptrs.has(e.pointerId) || !S.current) return;
     const before = gesturePoint();
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -829,6 +847,7 @@
     cropChanged();
   });
   const endPtr = e => {
+    if (T.pointerUp(e)) return;
     ptrs.delete(e.pointerId);
     if (ptrs.size < 2) twist = null;
     if (!ptrs.size) frame.classList.remove('dragging');
@@ -841,12 +860,13 @@
   if (!navigator.maxTouchPoints) {
     frame.addEventListener('gesturestart', e => {
       e.preventDefault();
-      if (!S.current) return;
+      if (!S.current || T.macGesture('start', e)) return;
       macGesture = { scale: 1, rotation: 0, tw: makeTwist() };
       frame.classList.add('dragging');
     });
     frame.addEventListener('gesturechange', e => {
       e.preventDefault();
+      if (T.macGesture('change', e)) return;
       if (!S.current || !macGesture) return;
       const rect = frame.getBoundingClientRect();
       const px = clamp(e.clientX - rect.left, 0, rect.width), py = clamp(e.clientY - rect.top, 0, rect.height);
@@ -858,6 +878,7 @@
     });
     frame.addEventListener('gestureend', e => {
       e.preventDefault();
+      T.macGesture('end', e);
       macGesture = null;
       frame.classList.remove('dragging');
     });
@@ -865,14 +886,15 @@
 
   frame.addEventListener('wheel', e => {
     if (!S.current || macGesture) return;
+    if (T.wheel(e)) return;
     e.preventDefault();
     const rect = frame.getBoundingClientRect();
     const f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015));
     zoomAt(e.clientX - rect.left, e.clientY - rect.top, f, rect);
     cropChanged();
   }, { passive: false });
-  frame.addEventListener('dblclick', () => {
-    if (!S.current) return;
+  frame.addEventListener('dblclick', e => {
+    if (!S.current || T.dblclick(e)) return;
     // recentrar y quitar el zoom (mantiene el giro de 90° si lo hay)
     S.current.crop = { z: 1, cx: 0.5, cy: 0.5, rot: base90(S.current.crop.rot || 0) };
     clampCrop(S.current);
@@ -961,17 +983,38 @@
   // copiar / pegar
   function copyAdj() {
     if (!S.current) return;
-    S.clip = { ...S.current.adj };
+    S.clip = { adj: { ...S.current.adj }, texts: JSON.parse(JSON.stringify(cleanTexts(S.current.texts))) };
     pasteBtn.disabled = pasteManyBtn.disabled = false;
-    toast('Ajustes copiados');
+    toast(S.clip.texts.length ? `Ajustes copiados (color y ${S.clip.texts.length} texto${S.clip.texts.length > 1 ? 's' : ''})` : 'Ajustes copiados');
   }
-  function pasteAdj() {
+  // Si lo copiado tiene textos, preguntar qué pegar.
+  function choosePasteMode() {
+    if (!S.clip || !S.clip.texts.length) return Promise.resolve('color');
+    return new Promise(res => {
+      const sh = $('#choiceSheet');
+      sh.hidden = false;
+      sh.onclick = e => {
+        const b = e.target.closest('button');
+        if (!b && e.target !== sh) return;
+        sh.hidden = true; sh.onclick = null;
+        res(b && b.dataset.mode || null);
+      };
+    });
+  }
+  function applyClip(it, mode) {
+    if (mode === 'color' || mode === 'all') it.adj = { ...S.clip.adj };
+    if (mode === 'texts' || mode === 'all') it.texts = JSON.parse(JSON.stringify(S.clip.texts)).map(L => ({ ...L, id: uid() }));
+  }
+  async function pasteAdj() {
     if (!S.current || !S.clip) return;
-    S.current.adj = { ...S.clip };
+    const mode = await choosePasteMode(); if (!mode) return;
+    T.deselect();
+    applyClip(S.current, mode);
     syncControls(); requestRender(); saveItem(S.current);
-    toast('Ajustes pegados');
+    toast(mode === 'texts' ? 'Textos pegados' : mode === 'all' ? 'Color y textos pegados' : 'Ajustes pegados');
   }
   $('#copyBtn').addEventListener('click', copyAdj);
+  $('#addTextBtn').addEventListener('click', () => T.add());
   pasteBtn.addEventListener('click', pasteAdj);
   $('#resetBtn').addEventListener('click', () => {
     if (!S.current) return;
@@ -981,8 +1024,10 @@
   });
 
   // pegar en varias
-  function startSelect() {
+  async function startSelect() {
     if (!S.clip) return;
+    const mode = await choosePasteMode(); if (!mode) return;
+    S.pasteMode = mode;
     S.selecting = true; S.selected.clear();
     document.body.classList.add('selecting');
     closeEditorMobile();
@@ -1013,11 +1058,12 @@
     const n = S.selected.size;
     for (const id of S.selected) {
       const it = S.items.get(id);
-      it.adj = { ...S.clip };
+      if (it === S.current) T.deselect();
+      applyClip(it, S.pasteMode || 'color');
       drawThumb(it); saveItem(it);
     }
     endSelect(); syncControls(); requestRender();
-    toast(`Ajustes pegados en ${n} foto${n > 1 ? 's' : ''}`);
+    toast(`${S.pasteMode === 'texts' ? 'Textos pegados' : S.pasteMode === 'all' ? 'Color y textos pegados' : 'Ajustes pegados'} en ${n} foto${n > 1 ? 's' : ''}`);
   });
 
   // eliminar
@@ -1051,9 +1097,12 @@
       const img = await loadImage(await getOrigBlob(it));
       s = { img, w: img.naturalWidth, h: img.naturalHeight };
     }
+    await T.fontsReady(it);
     const out = R.render(s.img, s.w, s.h, it.crop, it.adj, OUT_W, OUT_H, ASPECT, true);
     const c = canvas(OUT_W, OUT_H);
-    c.getContext('2d').drawImage(out, 0, 0);
+    const cx = c.getContext('2d');
+    cx.drawImage(out, 0, 0);
+    T.draw(cx, it, OUT_W, OUT_H);
     const blob = await toBlob(c, 'image/jpeg', 0.95);
     c.width = 0;
     return blob;
@@ -1115,8 +1164,9 @@
 
   // ================= Teclado =================
   document.addEventListener('keydown', e => {
+    if (T.keydown(e)) return;
     const tag = (e.target.tagName || '').toLowerCase();
-    if (tag === 'input' && e.target.type !== 'range') return;
+    if ((tag === 'input' && e.target.type !== 'range') || tag === 'textarea' || tag === 'select') return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyAdj(); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'v' && S.clip) { pasteAdj(); e.preventDefault(); }
@@ -1188,7 +1238,7 @@
     },
     async updateRemoteItem(it, m, thumbBlob) {
       const wasT = it.t;
-      Object.assign(it, { name: m.name, w: m.w, h: m.h, crop: { rot: 0, ...m.crop }, adj: { ...zeroAdj(), ...m.adj }, kind: m.kind, duration: m.duration, t: m.t, sync: m.sync });
+      Object.assign(it, { name: m.name, w: m.w, h: m.h, crop: { rot: 0, ...m.crop }, adj: { ...zeroAdj(), ...m.adj }, texts: m.texts || [], kind: m.kind, duration: m.duration, t: m.t, sync: m.sync });
       if (thumbBlob) {
         it.thumb = await loadImage(thumbBlob);
         await saveLocalSafe(() => DB.put('blobs', { id: it.id, thumb: thumbBlob }));   // cambió la portada: el original viejo ya no sirve
@@ -1197,6 +1247,7 @@
       await saveLocalSafe(() => DB.put('items', meta(it)));
       drawThumb(it);
       if (S.current === it) {
+        T.refresh();
         syncControls(); updateTitle();
         if (it.kind === 'video' && S.video && S.video.id === it.id && it.t !== wasT) {
           frameInput.value = it.duration ? Math.round(it.t / it.duration * 1000) : 0;
@@ -1207,6 +1258,8 @@
       }
     },
     async onProjectChanged() { renderGridSoon(); },
+    library: T.library,
+    fonts: T.fonts,
   };
 
   // ---- panel "Nube" ----
@@ -1328,10 +1381,11 @@
         S.gridAspect = ASPECT; $('#viewToggle').textContent = '4:5';
       }
     } catch { }
+    T.init();
     const [metas, order, deleted, orderDirty] = await Promise.all([DB.getAll('items'), DB.get('meta', 'order'), DB.get('meta', 'deleted'), DB.get('meta', 'orderDirty')]);
     S.deleted = new Set(deleted || []);
     S.orderDirty = !!orderDirty;
-    for (const m of metas) S.items.set(m.id, { ...m, adj: { ...zeroAdj(), ...m.adj } });
+    for (const m of metas) S.items.set(m.id, { ...m, adj: { ...zeroAdj(), ...m.adj }, texts: m.texts || [] });
     S.order = (order || []).filter(id => S.items.has(id));
     for (const id of S.items.keys()) if (!S.order.includes(id)) S.order.push(id);
     renderGrid();
@@ -1349,5 +1403,5 @@
   init().catch(reportError);
 
   // para pruebas
-  window.__mosaico = { importFiles, exportItem, loadHeicLib, clampCrop, S, get Sync() { return Sync; } };
+  window.__mosaico = { importFiles, exportItem, loadHeicLib, clampCrop, S, T, appApi, get Sync() { return Sync; } };
 })();

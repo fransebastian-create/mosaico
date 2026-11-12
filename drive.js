@@ -319,7 +319,55 @@ window.createMosaicoSync = function createMosaicoSync(app) {
   const folderUrl = () => st.project ? `https://drive.google.com/drive/folders/${st.project.id}` : null;
 
   // ---------------- Sincronización ----------------
-  const metaFields = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, kind: it.kind || 'image', duration: it.duration, t: it.t });
+  const metaFields = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: (it.texts || []).map(({ _box, ...L }) => L), kind: it.kind || 'image', duration: it.duration, t: it.t });
+
+  // ---- tipografías propias: archivos en archivos/ con appProperties (rol "font") ----
+  async function pushFonts() {
+    for (const f of app.fonts.pending()) {
+      setPhase('syncing', 'Subiendo tipografía ' + f.name);
+      const r = await uploadNew({ name: `tipografia-${f.id}.${f.ext || 'ttf'}`, parents: [st.project.archivosId], appProperties: { mosaicoRole: 'font', mosaicoId: f.id, mosaicoName: String(f.name).slice(0, 90), mosaicoExt: f.ext || 'ttf' } }, f.blob);
+      await app.fonts.setDriveId(f.id, r.id);
+    }
+  }
+  async function pullFonts(full) {
+    let q = `'${esc(st.project.archivosId)}' in parents and trashed=false and appProperties has { key='mosaicoRole' and value='font' }`;
+    if (!full && st.lastPull) q += ` and modifiedTime > '${new Date(st.lastPull - 5000).toISOString()}'`;
+    for (const f of await listAll(q)) {
+      const p = f.appProperties || {};
+      if (!p.mosaicoId || app.fonts.isKnown(p.mosaicoId)) continue;
+      setPhase('syncing', 'Bajando tipografía ' + (p.mosaicoName || ''));
+      const blob = await download(f.id);
+      await app.fonts.addRemote({ id: p.mosaicoId, name: p.mosaicoName || 'Tipografía', ext: p.mosaicoExt || 'ttf', driveId: f.id }, blob);
+    }
+  }
+  // ---- biblioteca compartida (estilos de texto, colores): datos/biblioteca.json ----
+  async function libraryFileId() {
+    if (st.project.bibliotecaId) return st.project.bibliotecaId;
+    const fs = await listAll(`'${esc(st.project.datosId)}' in parents and trashed=false and name='biblioteca.json'`);
+    if (fs[0]) { st.project.bibliotecaId = fs[0].id; ls.set(LS_PROJECT, st.project); }
+    return st.project.bibliotecaId || null;
+  }
+  async function pushLibrary() {
+    const local = app.library.get();
+    if (!local.dirty) return;
+    setPhase('syncing', 'Guardando estilos');
+    const id = await libraryFileId();
+    // leer, combinar y escribir: así no se pisan los estilos que agregó la otra persona
+    const remote = id ? await downloadJSON(id).catch(() => null) : null;
+    const merged = app.library.merge(remote, local);
+    if (id) await updateContent(id, jsonBlob(merged));
+    else {
+      const r = await uploadNew({ name: 'biblioteca.json', parents: [st.project.datosId], appProperties: { mosaicoRole: 'biblioteca' } }, jsonBlob(merged));
+      st.project.bibliotecaId = r.id; ls.set(LS_PROJECT, st.project);
+    }
+    app.library.apply(merged, local.gen);
+  }
+  async function pullLibrary(fileId) {
+    const remote = await downloadJSON(fileId).catch(() => null);
+    if (!remote) return;
+    const local = app.library.get();
+    app.library.apply(app.library.merge(remote, local));
+  }
 
   function ensureSync(it) {
     const pid = st.project.id;
@@ -416,7 +464,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     if (!st.lastPull) log(`En Drive: ${files.filter(f => f.appProperties && f.appProperties.mosaicoRole === 'item').length} publicaciones`);
     let maxT = st.lastPull || 0;
     const total = files.length; let n = 0;
-    let orderFile = null;
+    let orderFile = null, libFile = null;
     const local = new Map(app.listItems().map(it => [it.id, it]));
     const deleted = new Set(app.getOrderState().deleted);
     for (const f of files) {
@@ -424,6 +472,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
       maxT = Math.max(maxT, Date.parse(f.modifiedTime));
       const role = f.appProperties && f.appProperties.mosaicoRole;
       if (role === 'orden' || f.name === 'orden.json') { orderFile = f; continue; }
+      if (role === 'biblioteca' || f.name === 'biblioteca.json') { libFile = f; continue; }
       if (role !== 'item') continue;
       const id = f.appProperties.mosaicoId;
       if (deleted.has(id)) continue;
@@ -444,6 +493,8 @@ window.createMosaicoSync = function createMosaicoSync(app) {
         await withTimeout(app.updateRemoteItem(it, { ...metaFields(doc), sync: syncInfo }, thumb), 30000, 'actualizando ' + doc.name);
       }
     }
+    if (libFile) { st.project.bibliotecaId = libFile.id; await pullLibrary(libFile.id); }
+    await pullFonts(!st.lastPull);
     if (orderFile || !st.lastPull) {
       const remote = await downloadJSON(P.ordenId);
       const localO = app.getOrderState();
@@ -469,6 +520,8 @@ window.createMosaicoSync = function createMosaicoSync(app) {
       const pending = app.listItems().filter(it => !it.sync || it.sync.project !== st.project.id || it.sync.dirty || it.sync.mediaDirty || (it.kind === 'video' && !(it.sync.media || {}).video));
       // primero fotos y datos, los videos pesados al final
       pending.sort((a, b) => (a.kind === 'video') - (b.kind === 'video'));
+      await pushFonts();
+      await pushLibrary();
       if (pending.length) log(`Para subir: ${pending.length}`);
       for (const it of pending) { await pushItem(it); }
       if (app.getOrderState().dirty) await pushOrder();
@@ -520,6 +573,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     state, onChange(f) { st.listeners.add(f); f(state()); return () => st.listeners.delete(f); },
     signIn, signOut, findProjects, createProject, openProject, leaveProject, share, folderUrl,
     kick, fetchMedia, trashItem, syncNow: () => kick(0),
+    trashFile: id => { if (hasToken()) trash(id); },
     fromRedirect: back ? (back.error || 'ok') : null,   // volvimos recién de Google (celulares)
     _mergeOrder: mergeOrder, _putResumable: putResumable,
   };

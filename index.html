@@ -6,7 +6,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Mosaico">
 <title>Mosaico</title>
-<link rel="stylesheet" href="styles.css?v=0.9.2">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Inter:wght@400;700&family=Playfair+Display:ital@0;1&display=swap">
+<link rel="stylesheet" href="styles.css?v=1.0">
 </head>
 <body>
 <div id="app">
@@ -55,6 +58,7 @@
     </div>
     <div class="tools">
       <div class="row">
+        <button id="addTextBtn" class="chip accent" title="Agregar un texto sobre la foto">+ Texto</button>
         <button id="beforeBtn" class="chip" title="Mantené apretado para ver la foto sin ajustes">◐ Antes</button>
         <button id="copyBtn" class="chip">Copiar ajustes</button>
         <button id="pasteBtn" class="chip" disabled>Pegar</button>
@@ -82,7 +86,8 @@
         </div>
       </div>
       <div id="sliders"></div>
-      <p class="hint">Arrastrá la foto para mover el recorte. Con dos dedos (o el trackpad) podés agrandar, achicar y girar. Doble clic en la foto la recentra; doble clic en un ajuste lo vuelve a cero.</p>
+      <div id="textPanel"></div>
+      <p class="hint">Arrastrá la foto para mover el recorte. Con dos dedos (o el trackpad) podés agrandar, achicar y girar. Doble clic en la foto la recentra; doble clic en un ajuste lo vuelve a cero. Con <b>+ Texto</b> escribís sobre la publicación.</p>
     </div>
     <div class="editor-empty" id="editorEmpty">Elegí una foto de la grilla para editarla</div>
   </section>
@@ -102,13 +107,24 @@
     <button id="cloudClose" class="chip">Cerrar</button>
   </div>
 </div>
+<div id="choiceSheet" class="sheet" hidden>
+  <div class="sheet-card">
+    <p><strong>¿Qué querés pegar?</strong></p>
+    <button class="btn primary" data-mode="all">Color y textos</button>
+    <button class="btn" data-mode="color">Sólo el color</button>
+    <button class="btn" data-mode="texts">Sólo los textos</button>
+    <p class="muted-s">Pegar textos reemplaza los textos que ya tenga la foto.</p>
+    <button class="chip">Cancelar</button>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="config.js?v=0.9.2"></script>
-<script src="drive.js?v=0.9.2"></script>
-<script src="app.js?v=0.9.2"></script>
+<script src="config.js?v=1.0"></script>
+<script src="drive.js?v=1.0"></script>
+<script src="texto.js?v=1.0"></script>
+<script src="app.js?v=1.0"></script>
 </body>
 </html>
