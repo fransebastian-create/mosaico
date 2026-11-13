@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Inter:wght@400;700&family=Playfair+Display:ital@0;1&display=swap">
-<link rel="stylesheet" href="styles.css?v=1.3">
+<link rel="stylesheet" href="styles.css?v=1.4">
 </head>
 <body>
 <div id="app">
@@ -59,14 +59,14 @@
     </div>
     <div class="tools">
       <div class="row">
-        <button id="addTextBtn" class="chip accent" title="Agregar un texto sobre la foto">+ Texto</button>
         <button id="photoBtn" class="chip" title="Poner o cambiar la foto (los textos y el color quedan)">Cambiar foto</button>
         <button id="beforeBtn" class="chip" title="Mantené apretado para ver la foto sin ajustes">◐ Antes</button>
-        <button id="copyBtn" class="chip">Copiar ajustes</button>
+        <button id="copyBtn" class="chip" title="Copiar los ajustes de color (no las capas)">Copiar ajustes</button>
         <button id="pasteBtn" class="chip" disabled>Pegar</button>
         <button id="pasteManyBtn" class="chip" disabled>Pegar en…</button>
         <button id="resetBtn" class="chip">Restablecer</button>
       </div>
+      <div id="layersPanel"></div>
       <div class="tp-field bg-row" id="bgRow"><span>Fondo</span><div class="swatches" id="bgColors"></div></div>
       <div class="slider frame-row" id="frameRow" hidden>
         <label><span>Fotograma de portada</span><output id="frameOut">0:00</output></label>
@@ -90,7 +90,7 @@
       </div>
       <div id="sliders"></div>
       <div id="textPanel"></div>
-      <p class="hint">Arrastrá la foto para mover el recorte. Con dos dedos (o el trackpad) podés agrandar, achicar y girar. Doble clic en la foto la recentra; doble clic en un ajuste lo vuelve a cero. Con <b>+ Texto</b> escribís sobre la publicación.</p>
+      <p class="hint">Arrastrá la foto para mover el recorte. Con dos dedos (o el trackpad) podés agrandar, achicar y girar. Doble clic en la foto la recentra; doble clic en un ajuste lo vuelve a cero. Las capas (textos) se suman desde el panel <b>Capas</b>.</p>
     </div>
     <div class="editor-empty" id="editorEmpty">Elegí una foto de la grilla para editarla</div>
   </section>
@@ -127,24 +127,14 @@
     <button id="projClose" class="chip">Cerrar</button>
   </div>
 </div>
-<div id="choiceSheet" class="sheet" hidden>
-  <div class="sheet-card">
-    <p><strong>¿Qué querés pegar?</strong></p>
-    <button class="btn primary" data-mode="all">Color y textos</button>
-    <button class="btn" data-mode="color">Sólo el color</button>
-    <button class="btn" data-mode="texts">Sólo los textos</button>
-    <p class="muted-s">Pegar textos reemplaza los textos que ya tenga la foto.</p>
-    <button class="chip">Cancelar</button>
-  </div>
-</div>
 <div id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="config.js?v=1.3"></script>
-<script src="drive.js?v=1.3"></script>
-<script src="texto.js?v=1.3"></script>
-<script src="app.js?v=1.3"></script>
+<script src="config.js?v=1.4"></script>
+<script src="drive.js?v=1.4"></script>
+<script src="texto.js?v=1.4"></script>
+<script src="app.js?v=1.4"></script>
 </body>
 </html>

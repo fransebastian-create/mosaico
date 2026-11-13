@@ -415,3 +415,41 @@ body.text-mode .tools > :not(#textPanel) { display: none; }
 body.is-blank .bg-row { display: flex; }
 body.is-blank .slider.zoom, body.is-blank .rotate-row { display: none; }
 #photoBtn[hidden] { display: none; }
+
+/* ---------- capas ---------- */
+body.text-mode .tools > #layersPanel { display: flex; }
+#layersPanel { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+#layersPanel:empty { display: none; }
+.lp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; }
+.lp-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.lp-actions .chip { font-weight: 500; }
+.lp-list { display: flex; flex-direction: column; gap: 4px; }
+.lp-row {
+  display: flex; align-items: center; gap: 4px; padding: 4px 6px; min-height: 40px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+}
+.lp-row.on { border-color: var(--sel); box-shadow: inset 0 0 0 1px var(--sel); }
+.lp-row.hid .lp-name { opacity: .45; }
+.lp-bg { background: transparent; border-style: dashed; cursor: pointer; }
+.lp-bg .lp-name { color: var(--muted); }
+.lp-grip { width: 22px; height: 28px; display: grid; place-items: center; color: var(--muted); cursor: grab; touch-action: none; flex: none; }
+.lp-grip svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 3; stroke-linecap: round; fill: none; }
+.lp-ic {
+  appearance: none; border: 0; background: transparent; color: var(--muted); width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center; border-radius: 8px; cursor: pointer; padding: 0;
+}
+.lp-ic svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.lp-ic.act { color: var(--ink); }
+.lp-ic:active { background: var(--line); }
+.lp-name {
+  appearance: none; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; text-align: left;
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; padding: 6px 4px;
+  display: flex; align-items: center; gap: 6px;
+}
+.lp-type { font: 600 11px/1 Georgia, serif; width: 18px; height: 18px; border: 1px solid var(--line); border-radius: 4px; display: grid; place-items: center; flex: none; color: var(--muted); }
+.tp-blend select { font: inherit; font-size: 14px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); }
+.tbox.locked { border-style: solid; border-color: rgba(255,255,255,.5); }
+.tbox.locked .thandle { display: none; }
+.tbox.off { opacity: .4; }
+/* los botones ocultos tienen que quedar ocultos aunque sean chips */
+.chip[hidden], .btn[hidden] { display: none !important; }

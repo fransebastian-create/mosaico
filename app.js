@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.3';
+  const VERSION = 'v1.4';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -463,6 +463,7 @@
     saveItem: it => saveItem(it), requestRender: () => requestRender(),
     redrawAll: () => { S.order.forEach(id => drawThumb(S.items.get(id))); requestRender(); },
     kickSync: () => Sync && Sync.kick(), trashFile: id => Sync && Sync.trashFile(id),
+    startSelect: mode => startSelect(mode),
   });
 
   let toastTimer;
@@ -504,8 +505,8 @@
     const cw = 360, ch = Math.round(cw / S.gridAspect);
     const vs = videoSource(it);
     const src = vs || { img: it.thumb, w: it.thumb.naturalWidth, h: it.thumb.naturalHeight };
-    const out = R.render(src.img, src.w, src.h, it.crop,
-      S.showOriginalGrid ? null : it.adj, cw, ch, S.gridAspect);
+    const adj = S.showOriginalGrid ? null : it.adj;
+    const out = it === S.current ? renderBase('thumb', it, src, adj, cw, ch, S.gridAspect) : R.render(src.img, src.w, src.h, it.crop, adj, cw, ch, S.gridAspect);
     const c = it.canvas;
     if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
     const cx = c.getContext('2d');
@@ -762,6 +763,7 @@
     if (S.current && S.current.cell) S.current.cell.classList.remove('current');
     if (S.current !== it) T.onItemChanged();
     S.current = it;
+    T.renderLayers();
     it.cell && it.cell.classList.add('current');
     document.body.classList.add('has-current', 'editing');
     syncControls(); updateTitle(); fitFrame(); requestRender();
@@ -901,11 +903,25 @@
     if (S.full && S.full.id === it.id) return S.full;
     return { img: it.thumb, w: it.thumb.naturalWidth, h: it.thumb.naturalHeight, light: true };
   }
+  // La foto ya coloreada queda guardada: si sólo cambian las capas (mover un texto), no se vuelve a procesar.
+  const baseCache = new Map();
+  function renderBase(slot, it, s, adj, ow, oh, aspect) {
+    const isVid = typeof HTMLVideoElement !== 'undefined' && s.img instanceof HTMLVideoElement;
+    const key = isVid ? null : [it.id, ow, oh, aspect, JSON.stringify(it.crop), adj ? JSON.stringify(adj) : '-', s.w, s.h].join('|');
+    let e = baseCache.get(slot);
+    if (key && e && e.key === key && e.img === s.img) return e.c;
+    const out = R.render(s.img, s.w, s.h, it.crop, adj, ow, oh, aspect);
+    if (!e) { e = { c: canvas(ow, oh) }; baseCache.set(slot, e); }
+    if (e.c.width !== ow || e.c.height !== oh) { e.c.width = ow; e.c.height = oh; }
+    e.c.getContext('2d').drawImage(out, 0, 0);
+    e.key = key; e.img = s.img;
+    return e.c;
+  }
   function drawPreview() {
     const it = S.current;
     if (!it || !it.thumb || !R) return;
     const s = source(it);
-    const out = R.render(s.img, s.w, s.h, it.crop, S.holdBefore ? null : it.adj, pv.width, pv.height, ASPECT);
+    const out = renderBase('preview', it, s, S.holdBefore ? null : it.adj, pv.width, pv.height, ASPECT);
     pctx.drawImage(out, 0, 0);
     T.draw(pctx, it, pv.width, pv.height);
     T.afterPreview();
@@ -1131,40 +1147,21 @@
   beforeBtn.addEventListener('contextmenu', e => e.preventDefault());
 
   // copiar / pegar
+  // Ajustes de color (filtros): se copian y pegan aparte de las capas.
   function copyAdj() {
     if (!S.current) return;
-    S.clip = { adj: { ...S.current.adj }, texts: JSON.parse(JSON.stringify(cleanTexts(S.current.texts))) };
+    S.clip = { ...S.current.adj };
+    S.lastCopied = 'color';
     pasteBtn.disabled = pasteManyBtn.disabled = false;
-    toast(S.clip.texts.length ? `Ajustes copiados (color y ${S.clip.texts.length} texto${S.clip.texts.length > 1 ? 's' : ''})` : 'Ajustes copiados');
+    toast('Ajustes de color copiados');
   }
-  // Si lo copiado tiene textos, preguntar qué pegar.
-  function choosePasteMode() {
-    if (!S.clip || !S.clip.texts.length) return Promise.resolve('color');
-    return new Promise(res => {
-      const sh = $('#choiceSheet');
-      sh.hidden = false;
-      sh.onclick = e => {
-        const b = e.target.closest('button');
-        if (!b && e.target !== sh) return;
-        sh.hidden = true; sh.onclick = null;
-        res(b && b.dataset.mode || null);
-      };
-    });
-  }
-  function applyClip(it, mode) {
-    if (mode === 'color' || mode === 'all') it.adj = { ...S.clip.adj };
-    if (mode === 'texts' || mode === 'all') it.texts = JSON.parse(JSON.stringify(S.clip.texts)).map(L => ({ ...L, id: uid() }));
-  }
-  async function pasteAdj() {
+  function pasteAdj() {
     if (!S.current || !S.clip) return;
-    const mode = await choosePasteMode(); if (!mode) return;
-    T.deselect();
-    applyClip(S.current, mode);
+    S.current.adj = { ...S.clip };
     syncControls(); requestRender(); saveItem(S.current);
-    toast(mode === 'texts' ? 'Textos pegados' : mode === 'all' ? 'Color y textos pegados' : 'Ajustes pegados');
+    toast('Ajustes de color pegados');
   }
   $('#copyBtn').addEventListener('click', copyAdj);
-  $('#addTextBtn').addEventListener('click', () => T.add());
   pasteBtn.addEventListener('click', pasteAdj);
   $('#resetBtn').addEventListener('click', () => {
     if (!S.current) return;
@@ -1174,10 +1171,11 @@
   });
 
   // pegar en varias
-  async function startSelect() {
-    if (!S.clip) return;
-    const mode = await choosePasteMode(); if (!mode) return;
+  // "Pegar en…": elegir publicaciones de la grilla para pegar el color o la capa copiada.
+  function startSelect(mode = 'color') {
+    if (mode === 'color' ? !S.clip : !T.hasLayerClip()) return;
     S.pasteMode = mode;
+    $('#selectApply').textContent = mode === 'layer' ? 'Pegar capa' : 'Pegar color';
     S.selecting = true; S.selected.clear();
     document.body.classList.add('selecting');
     closeEditorMobile();
@@ -1198,7 +1196,7 @@
     $('#selectCount').textContent = n ? `${n} seleccionada${n > 1 ? 's' : ''}` : 'Tocá las fotos';
     $('#selectApply').disabled = !n;
   }
-  pasteManyBtn.addEventListener('click', startSelect);
+  pasteManyBtn.addEventListener('click', () => startSelect('color'));
   $('#selectCancel').addEventListener('click', endSelect);
   $('#selectAll').addEventListener('click', () => {
     S.order.forEach(id => { S.selected.add(id); S.items.get(id).cell.classList.add('selected'); });
@@ -1208,12 +1206,12 @@
     const n = S.selected.size;
     for (const id of S.selected) {
       const it = S.items.get(id);
-      if (it === S.current) T.deselect();
-      applyClip(it, S.pasteMode || 'color');
+      if (S.pasteMode === 'layer') T.pasteLayerInto(it);   // se suma arriba de las capas que ya tiene
+      else it.adj = { ...S.clip };
       drawThumb(it); saveItem(it);
     }
-    endSelect(); syncControls(); requestRender();
-    toast(`${S.pasteMode === 'texts' ? 'Textos pegados' : S.pasteMode === 'all' ? 'Color y textos pegados' : 'Ajustes pegados'} en ${n} foto${n > 1 ? 's' : ''}`);
+    endSelect(); syncControls(); requestRender(); T.renderLayers();
+    toast(`${S.pasteMode === 'layer' ? 'Capa pegada' : 'Color pegado'} en ${n} publicaci${n > 1 ? 'ones' : 'ón'}`);
   });
 
   // eliminar
@@ -1320,6 +1318,7 @@
     if ((tag === 'input' && e.target.type !== 'range') || tag === 'textarea' || tag === 'select') return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyAdj(); e.preventDefault(); }
+    else if (mod && e.key.toLowerCase() === 'v' && S.lastCopied === 'layer' && T.hasLayerClip()) { T.pasteLayer(); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'v' && S.clip) { pasteAdj(); e.preventDefault(); }
     else if (e.key === 'Escape' && S.selecting) endSelect();
     else if (!mod && tag !== 'input' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft') && S.current) {

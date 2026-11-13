@@ -162,6 +162,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     ctx.translate(x0 + L.x * W, L.y * H);
     ctx.rotate(rad(L.rot || 0));
     ctx.globalAlpha = clamp(L.opacity ?? 1, 0, 1);
+    ctx.globalCompositeOperation = BLENDS[L.blend] ? L.blend : 'source-over';
     ctx.textBaseline = 'middle';
     ctx.font = fontCSS(m.f, m.fontPx);
     if (L.bg && L.bg.on) {
@@ -186,13 +187,18 @@ window.createMosaicoText = function createMosaicoText(A) {
     drawLines(ctx, m, L.align, false);
     ctx.restore();
   }
-  // Dibuja todos los textos de una publicación en un lienzo de ow×oh (4:5 o miniatura 3:4).
+  // Modos de fusión (como en Photoshop). La clave es el nombre que entiende el navegador.
+  const BLENDS = { 'source-over': 'Normal', multiply: 'Multiplicar', screen: 'Trama', overlay: 'Superponer', 'soft-light': 'Luz suave', 'hard-light': 'Luz fuerte', darken: 'Oscurecer', lighten: 'Aclarar', difference: 'Diferencia' };
+  // Dibuja todas las capas de una publicación en un lienzo de ow×oh (4:5 o miniatura 3:4).
   function draw(ctx, it, ow, oh) {
     if (!it || !it.texts || !it.texts.length) return;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const x0 = (ow - oh * ASPECT) / 2;
-    for (const L of it.texts) drawText(ctx, L, x0, oh);
+    for (const L of it.texts) {
+      if (L.hidden) { if (!L._box) { const m = layout(ctx, L, oh); L._box = { w: m.maxW / oh, h: m.h / oh }; } continue; }
+      drawText(ctx, L, x0, oh);
+    }
     ctx.restore();
   }
 
@@ -208,7 +214,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   let sel = null;            // id del texto seleccionado
   let lastFont = (() => { try { return localStorage.getItem('mosaico.lastFont') || 'inter'; } catch { return 'inter'; } })();
   const cur = () => S.current && sel ? (S.current.texts || []).find(L => L.id === sel) || null : null;
-  function changed() { if (!S.current) return; A.saveItem(S.current); A.requestRender(); }
+  function changed() { if (!S.current) return; A.saveItem(S.current); A.requestRender(); renderLayersSoon(); }
 
   function add() {
     const it = S.current; if (!it) return;
@@ -224,7 +230,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   function select(id) {
     sel = id;
     document.body.classList.toggle('text-mode', !!id);
-    syncPanel(); A.requestRender();
+    syncPanel(); A.requestRender(); renderLayers();
     if (!id) hideBox();
   }
   function deselect() { if (sel) { const ta = $('#tText'); if (document.activeElement === ta) ta.blur(); select(null); } }
@@ -239,14 +245,6 @@ window.createMosaicoText = function createMosaicoText(A) {
     delete D._box;
     it.texts.push(D); select(D.id); changed();
   }
-  function restack(dir) {
-    const it = S.current, L = cur(); if (!L) return;
-    const a = it.texts, i = a.indexOf(L), j = clamp(i + dir, 0, a.length - 1);
-    if (i === j) return;
-    a.splice(i, 1); a.splice(j, 0, L); changed(); syncPanel();
-    toast(dir > 0 ? (j === a.length - 1 ? 'Este texto quedó encima de todos' : 'Subió un lugar') : (j === 0 ? 'Este texto quedó debajo de todos' : 'Bajó un lugar'));
-  }
-
   // ---- recuadro de selección y guías ----
   const layer = document.createElement('div'); layer.className = 'tlayer';
   layer.innerHTML = '<div class="tsnap v"></div><div class="tsnap h"></div><div class="tbox" hidden><div class="thandle" title="Arrastrá para agrandar y girar"></div></div>';
@@ -264,6 +262,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     box.style.width = L._box.w * Hc + pad * 2 + 'px';
     box.style.height = L._box.h * Hc + pad * 2 + 'px';
     box.style.transform = `translate(-50%, -50%) rotate(${L.rot || 0}deg)`;
+    box.classList.toggle('locked', !!L.locked); box.classList.toggle('off', !!L.hidden);
   }
 
   // ---- gestos ----
@@ -271,7 +270,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     const its = (S.current && S.current.texts) || [];
     const H = rect.height, pad = (matchMedia('(pointer: coarse)').matches ? 18 : 8) / H;
     for (let i = its.length - 1; i >= 0; i--) {
-      const L = its[i]; if (!L._box) continue;
+      const L = its[i]; if (!L._box || L.hidden || L.locked) continue;
       const dx = (px / rect.width - L.x) * ASPECT, dy = py / H - L.y;
       const a = -rad(L.rot || 0), lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a);
       if (Math.abs(lx) <= L._box.w / 2 + pad && Math.abs(ly) <= L._box.h / 2 + pad) return L;
@@ -378,7 +377,7 @@ window.createMosaicoText = function createMosaicoText(A) {
 
   // rueda / trackpad: si hay un texto elegido, agranda el texto en vez de la foto
   function wheel(e) {
-    const L = cur(); if (!L) return false;
+    const L = cur(); if (!L || L.locked) return false;
     e.preventDefault();
     L.size = clamp(L.size * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), 0.012, 0.6);
     changed(); syncPanelValues();
@@ -386,7 +385,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   let mg = null;
   function macGesture(type, e) {
-    const L = cur(); if (!L && !mg) return false;
+    const L = cur(); if ((!L || L.locked) && !mg) return false;
     e.preventDefault();
     if (type === 'start') mg = { scale: 1, rotation: 0, L, tw: { acc: 0, on: false, start: L.rot || 0 } };
     else if (type === 'change' && mg) {
@@ -416,8 +415,10 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (e.key === 'Delete' || e.key === 'Backspace') { removeSel(); e.preventDefault(); return true; }
     if (mod && e.key.toLowerCase() === 'd') { duplicate(); e.preventDefault(); return true; }
     const step = e.shiftKey ? 0.02 : 0.004;
+    if (mod && e.key.toLowerCase() === 'v' && S.lastCopied === 'layer' && layerClip) { pasteLayer(); e.preventDefault(); return true; }
     const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
-    if (mv && !mod) { L.x = clamp(L.x + mv[0] / ASPECT, 0, 1); L.y = clamp(L.y + mv[1], 0, 1); changed(); e.preventDefault(); return true; }
+    if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyLayer(L); e.preventDefault(); return true; }
+    if (mv && !mod && !L.locked) { L.x = clamp(L.x + mv[0] / ASPECT, 0, 1); L.y = clamp(L.y + mv[1], 0, 1); changed(); e.preventDefault(); return true; }
     return false;
   }
 
@@ -433,8 +434,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     <div class="row tp-head">
       <button class="chip" data-t="done">‹ Listo</button>
       <button class="chip" data-t="dup">Duplicar</button>
-      <button class="chip" data-t="front" title="Poner este texto por encima de los otros textos">Al frente</button>
-      <button class="chip" data-t="back" title="Poner este texto por debajo de los otros textos">Al fondo</button>
+      <button class="chip" data-t="copy" title="Copiar esta capa para pegarla en otra publicación">Copiar capa</button>
       <button class="chip danger" data-t="del">Borrar</button>
     </div>
     <textarea id="tText" rows="2" placeholder="Escribí acá" autocapitalize="sentences" spellcheck="true"></textarea>
@@ -557,6 +557,14 @@ window.createMosaicoText = function createMosaicoText(A) {
   slider($('#tSizeRot'), { label: 'Tamaño', min: 12, max: 400, get: L => Math.round(L.size * 1000), set: (L, v) => { L.size = v / 1000; }, fmt: v => (v / 10).toFixed(1) });
   slider($('#tSizeRot'), { label: 'Giro', min: -180, max: 180, step: 0.5, get: L => L.rot || 0, set: (L, v) => { L.rot = snapRot(v); }, fmt: v => (Math.abs(v) < 0.05 ? '0' : v > 0 ? '+' + v : v) + '°' });
   slider($('#tLook'), { label: 'Opacidad', min: 5, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct });
+  {
+    const row = document.createElement('label'); row.className = 'tp-color tp-blend';
+    row.innerHTML = `<span>Fusión</span><select aria-label="Modo de fusión">${Object.entries(BLENDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>`;
+    const sl = row.querySelector('select');
+    sl.addEventListener('change', () => { const L = cur(); if (!L) return; L.blend = sl.value; changed(); });
+    refreshers.push(L => { sl.value = BLENDS[L.blend] ? L.blend : 'source-over'; });
+    $('#tLook').append(row);
+  }
   slider($('#tLook'), { label: 'Interletrado', min: -100, max: 400, step: 5, get: L => L.letter || 0, set: (L, v) => { L.letter = v; }, fmt: v => (v > 0 ? '+' : '') + v });
   slider($('#tLook'), { label: 'Interlineado', min: 70, max: 250, step: 5, get: L => Math.round((L.line || 1.2) * 100), set: (L, v) => { L.line = v / 100; }, fmt: v => (v / 100).toFixed(2) });
   section($('#tShadow'), {
@@ -687,22 +695,113 @@ window.createMosaicoText = function createMosaicoText(A) {
   // botones de arriba
   panel.querySelector('.tp-head').addEventListener('click', e => {
     const b = e.target.closest('[data-t]'); if (!b) return;
-    ({ done: deselect, dup: duplicate, front: () => restack(1), back: () => restack(-1), del: removeSel })[b.dataset.t]();
+    ({ done: deselect, dup: duplicate, copy: () => copyLayer(cur()), del: removeSel })[b.dataset.t]();
   });
 
   function syncPanel() {
     const L = cur();
     if (!L) return;
     for (const r of refreshers) r(L);
-    const ts = S.current.texts, i = ts.indexOf(L);
-    const fr = panel.querySelector('[data-t="front"]'), bk = panel.querySelector('[data-t="back"]');
-    fr.hidden = bk.hidden = ts.length < 2;
-    fr.disabled = i === ts.length - 1; bk.disabled = i === 0;
   }
   // sólo los valores que cambian con gestos (más liviano)
   let svRaf = 0;
   function syncPanelValues() { if (svRaf) return; svRaf = requestAnimationFrame(() => { svRaf = 0; syncPanel(); }); }
   function escHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+  // ---------------- panel de capas ----------------
+  const lp = $('#layersPanel');
+  const IC = {
+    eye: '<svg viewBox="0 0 20 20"><path d="M1.5 10S5 4 10 4s8.5 6 8.5 6-3.5 6-8.5 6-8.5-6-8.5-6z"/><circle cx="10" cy="10" r="2.6"/></svg>',
+    eyeOff: '<svg viewBox="0 0 20 20"><path d="M3 3l14 14M8.2 4.3A8 8 0 0 1 10 4c5 0 8.5 6 8.5 6a14 14 0 0 1-2.6 3.2M5 6.2A14 14 0 0 0 1.5 10S5 16 10 16a7.6 7.6 0 0 0 3.2-.7"/></svg>',
+    lock: '<svg viewBox="0 0 20 20"><rect x="4" y="9" width="12" height="8" rx="1.6"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>',
+    unlock: '<svg viewBox="0 0 20 20"><rect x="4" y="9" width="12" height="8" rx="1.6"/><path d="M7 9V6.5a3 3 0 0 1 5.8-1"/></svg>',
+    copy: '<svg viewBox="0 0 20 20"><rect x="7" y="7" width="10" height="10" rx="1.6"/><path d="M13 7V4.6A1.6 1.6 0 0 0 11.4 3H4.6A1.6 1.6 0 0 0 3 4.6v6.8A1.6 1.6 0 0 0 4.6 13H7"/></svg>',
+    grip: '<svg viewBox="0 0 20 20"><path d="M7 5h.01M13 5h.01M7 10h.01M13 10h.01M7 15h.01M13 15h.01"/></svg>',
+  };
+  const layerName = L => L.name || (L.text || '').split('\n')[0].trim().slice(0, 32) || 'Texto';
+  let layerClip = (() => { try { return JSON.parse(localStorage.getItem('mosaico.layerClip')); } catch { return null; } })();
+  function copyLayer(L) {
+    if (!L) return;
+    const { _box, id, ...rest } = clone(L);
+    layerClip = rest;
+    try { localStorage.setItem('mosaico.layerClip', JSON.stringify(layerClip)); } catch { }
+    S.lastCopied = 'layer';
+    toast(`Capa “${layerName(L)}” copiada: pegala en otra publicación`);
+    renderLayers();
+  }
+  function pasteLayerInto(it) {
+    if (!layerClip || !it) return null;
+    const L = { ...clone(layerClip), id: uid() };
+    it.texts = it.texts || [];
+    it.texts.push(L);
+    return L;
+  }
+  function pasteLayer() {
+    const it = S.current; if (!it || !layerClip) return;
+    const L = pasteLayerInto(it);
+    select(L.id); changed();
+    toast('Capa pegada');
+  }
+  let lpRaf = 0;
+  function renderLayersSoon() { if (lpRaf) return; lpRaf = requestAnimationFrame(() => { lpRaf = 0; renderLayers(); }); }
+  function renderLayers() {
+    const it = S.current;
+    if (!it) { lp.innerHTML = ''; return; }
+    const ts = it.texts || [];
+    const rows = ts.slice().reverse().map(L => `
+      <div class="lp-row${L.id === sel ? ' on' : ''}${L.hidden ? ' hid' : ''}" data-id="${L.id}">
+        <span class="lp-grip" title="Arrastrá para cambiar el orden">${IC.grip}</span>
+        <button class="lp-ic" data-l="eye" title="${L.hidden ? 'Mostrar' : 'Ocultar'}">${L.hidden ? IC.eyeOff : IC.eye}</button>
+        <button class="lp-name" data-l="sel" title="Tocá para elegirla · doble toque para renombrar"><span class="lp-type">T</span>${escHtml(layerName(L))}</button>
+        <button class="lp-ic${L.locked ? ' act' : ''}" data-l="lock" title="${L.locked ? 'Desbloquear' : 'Bloquear (no se mueve sin querer)'}">${L.locked ? IC.lock : IC.unlock}</button>
+        <button class="lp-ic" data-l="copy" title="Copiar esta capa">${IC.copy}</button>
+      </div>`).join('');
+    const bgLabel = it.kind === 'blank' ? 'Fondo · color' : it.kind === 'video' ? 'Fondo · video' : 'Fondo · foto';
+    lp.innerHTML = `
+      <div class="lp-head"><span>Capas</span>
+        <div class="lp-actions">
+          <button class="chip accent" data-l="addtext" id="addTextBtn" title="Agregar un texto">+ Texto</button>
+          ${layerClip ? `<button class="chip" data-l="paste" title="Pegar la capa copiada">Pegar capa</button><button class="chip" data-l="pastemany" title="Pegar la capa copiada en varias publicaciones">Pegar en…</button>` : ''}
+        </div></div>
+      <div class="lp-list">${rows}</div>
+      <div class="lp-row lp-bg${sel ? '' : ' on'}" data-l="bg"><span class="lp-grip"></span><span class="lp-ic"></span><span class="lp-name">${bgLabel}</span></div>
+      ${ts.length ? '' : '<p class="muted-s">Sumá capas con <b>+ Texto</b>. Después las ordenás arrastrando ⋮⋮, las ocultás con el ojo o las bloqueás con el candado.</p>'}`;
+    const list = lp.querySelector('.lp-list');
+    if (window.Sortable && ts.length > 1) Sortable.create(list, {
+      handle: '.lp-grip', animation: 140,
+      onEnd() {
+        const ids = [...list.children].map(r => r.dataset.id).reverse();   // la lista se ve de arriba (frente) hacia abajo
+        it.texts = ids.map(id => ts.find(L => L.id === id)).filter(Boolean);
+        changed(); renderLayers();
+      },
+    });
+  }
+  let lastNameTap = { id: null, t: 0 };
+  function renameLayer(L) {
+    const n = prompt('Nombre de la capa', layerName(L));
+    if (n == null) return;
+    L.name = n.trim() || undefined; changed(); renderLayers();
+  }
+  lp.addEventListener('click', e => {
+    const b = e.target.closest('[data-l]'); if (!b || !S.current) return;
+    const row = b.closest('.lp-row'), L = row && row.dataset.id ? (S.current.texts || []).find(x => x.id === row.dataset.id) : null;
+    const act = b.dataset.l;
+    if (act === 'addtext') return add();
+    if (act === 'paste') return pasteLayer();
+    if (act === 'pastemany') return A.startSelect('layer');
+    if (act === 'bg') return deselect();
+    if (!L) return;
+    if (act === 'sel') {
+      const now = Date.now();
+      if (lastNameTap.id === L.id && now - lastNameTap.t < 380) { lastNameTap = { id: null, t: 0 }; return renameLayer(L); }
+      lastNameTap = { id: L.id, t: now };
+      if (sel !== L.id) select(L.id);
+      return;
+    }
+    if (act === 'eye') { L.hidden = !L.hidden; changed(); renderLayers(); return; }
+    if (act === 'lock') { L.locked = !L.locked; changed(); renderLayers(); A.requestRender(); return; }
+    if (act === 'copy') return copyLayer(L);
+  });
 
   // ---------------- inicio ----------------
   async function init() {
@@ -720,7 +819,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     init, draw, fontsReady, afterPreview, add, deselect, select,
     pointerDown, pointerMove, pointerUp, wheel, macGesture, dblclick, keydown,
     onItemChanged() { if (sel) select(null); },
-    refresh() { if (sel && !cur()) select(null); else { syncPanel(); } },
+    refresh() { if (sel && !cur()) select(null); else { syncPanel(); } renderLayers(); },
+    renderLayers, pasteLayerInto, hasLayerClip: () => !!layerClip, pasteLayer,
     hasSelection: () => !!cur(),
     // selector de color y paleta compartida, para otros controles (p. ej. el fondo de una publicación vacía)
     colorPicker: opts => makePicker(opts),
