@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.4';
+  const VERSION = 'v1.5';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -31,9 +31,10 @@
   // Doble clic (compu) o doble toque (celular, donde el navegador no avisa doble clic en los controles).
   function onDoubleTap(el, fn) {
     let last = null;
-    el.addEventListener('dblclick', e => { e.preventDefault(); fn(); last = null; });
+    const skip = e => e.target.closest && e.target.closest('.nudge');   // los botones − / + no cuentan como doble toque
+    el.addEventListener('dblclick', e => { if (skip(e)) return; e.preventDefault(); fn(); last = null; });
     el.addEventListener('pointerdown', e => {
-      if (e.pointerType === 'mouse') return;
+      if (e.pointerType === 'mouse' || skip(e)) return;
       const now = Date.now();
       if (last && now - last.t < 380 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) { last = null; fn(); }
       else last = { t: now, x: e.clientX, y: e.clientY };
@@ -134,7 +135,7 @@
   };
 
   const cleanTexts = ts => (ts || []).map(({ _box, ...L }) => L);
-  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, sync: it.sync || null });
+  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, parent: it.parent, slides: it.slides, sync: it.sync || null });
   let Sync = null;   // sincronización con Google Drive (drive.js)
   const saveTimers = new Map();
   function saveItem(it) {
@@ -473,6 +474,51 @@
     if (!sticky) toastTimer = setTimeout(() => t.classList.remove('show'), ms);
   }
 
+  // ================= Carruseles =================
+  // Cada diapositiva es una publicación más (con su foto, color y capas). La primera manda: es la que
+  // ocupa el lugar en la grilla y guarda el orden de las demás (slides); las otras apuntan a ella (parent).
+  const CAROUSEL_ICON = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="8" y="3" width="13" height="13" rx="2"/><path d="M16 19.5v.5a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2V9a1 1 0 0 1 1-1h.5"/></svg>';
+  const isChild = it => !!(it && it.parent && it.parent !== it.id && S.items.has(it.parent) && !S.items.get(it.parent).parent);
+  const leaderOf = it => (isChild(it) ? S.items.get(it.parent) : it);
+  function slidesOf(lead) {
+    if (!lead || isChild(lead)) return lead ? [lead] : [];
+    const kids = [];
+    for (const x of S.items.values()) if (x.parent === lead.id && x !== lead) kids.push(x);
+    if (!kids.length) return [lead];
+    const ord = (lead.slides || []).filter(id => kids.some(k => k.id === id));
+    for (const k of kids) if (!ord.includes(k.id)) ord.push(k.id);
+    return [lead, ...ord.map(id => S.items.get(id))];
+  }
+  // En la grilla van sólo las primeras diapositivas (y cualquier publicación que haya quedado suelta).
+  function normalizeOrder() {
+    const seen = new Set();
+    S.order = S.order.filter(id => { const it = S.items.get(id); if (!it || isChild(it) || seen.has(id)) return false; seen.add(id); return true; });
+    for (const it of S.items.values()) if (!isChild(it) && !seen.has(it.id)) { S.order.push(it.id); seen.add(it.id); }
+  }
+  // Deja el carrusel con estas diapositivas, en este orden, en el lugar que ocupaba oldLeadId.
+  function setSlides(ids, oldLeadId) {
+    const items = ids.map(id => S.items.get(id)).filter(Boolean);
+    if (!items.length) return null;
+    const lead = items[0], touched = new Set();
+    const setF = (it, k, v) => {
+      if (JSON.stringify(it[k]) === JSON.stringify(v)) return;
+      if (v === undefined) delete it[k]; else it[k] = v;
+      touched.add(it);
+    };
+    setF(lead, 'parent', undefined);
+    setF(lead, 'slides', items.length > 1 ? items.slice(1).map(x => x.id) : undefined);
+    for (const it of items.slice(1)) { setF(it, 'parent', lead.id); setF(it, 'slides', undefined); }
+    const gone = new Set([...items.map(x => x.id), oldLeadId]);
+    let pos = 0;
+    for (const id of S.order) { if (id === oldLeadId) break; if (!gone.has(id)) pos++; }
+    if (!S.order.includes(oldLeadId)) pos = 0;
+    S.order = S.order.filter(id => !gone.has(id));
+    S.order.splice(pos, 0, lead.id);
+    touched.forEach(saveItem);
+    saveOrder();
+    return lead;
+  }
+
   // ================= Grilla =================
   function cellFor(it) {
     if (!it.cell) {
@@ -485,10 +531,13 @@
         const vb = document.createElement('span'); vb.className = 'vbadge'; vb.textContent = '▶';
         d.append(vb);
       }
+      const cb = document.createElement('span'); cb.className = 'cbadge'; cb.innerHTML = CAROUSEL_ICON;
+      d.append(cb);
       d.addEventListener('click', () => onCellClick(it));
       it.canvas = c; it.cell = d;
     }
-    it.cell.classList.toggle('current', S.current === it);
+    it.cell.classList.toggle('current', !!S.current && leaderOf(S.current) === it);
+    it.cell.classList.toggle('carousel', slidesOf(it).length > 1);
     it.cell.classList.toggle('selected', S.selected.has(it.id));
     return it.cell;
   }
@@ -501,7 +550,8 @@
     return null;
   }
   function drawThumb(it) {
-    if (!it.thumb || !it.canvas || !R) return;
+    if (!it.thumb || !R || (!it.canvas && !it.stripCanvas)) return;
+    if (!it.canvas) it.canvas = canvas(1, 1);   // diapositiva de un carrusel: sólo se ve en la tira
     const cw = 360, ch = Math.round(cw / S.gridAspect);
     const vs = videoSource(it);
     const src = vs || { img: it.thumb, w: it.thumb.naturalWidth, h: it.thumb.naturalHeight };
@@ -512,8 +562,15 @@
     const cx = c.getContext('2d');
     cx.drawImage(out, 0, 0);
     T.draw(cx, it, cw, ch);
+    const sc = it.stripCanvas;
+    if (sc) {
+      const sw = 96, sh = Math.round(sw / S.gridAspect);
+      if (sc.width !== sw || sc.height !== sh) { sc.width = sw; sc.height = sh; }
+      const sx = sc.getContext('2d'); sx.imageSmoothingQuality = 'high'; sx.drawImage(c, 0, 0, sw, sh);
+    }
   }
   function renderGrid() {
+    normalizeOrder();
     gridEl.classList.toggle('a45', S.gridAspect === ASPECT);
     gridEl.replaceChildren(...S.order.map(id => cellFor(S.items.get(id))));
     emptyEl.hidden = S.order.length > 0;
@@ -524,6 +581,7 @@
     updateTitle();
   }
   function onCellClick(it) {
+    if (S.selecting && S.pasteMode === 'carousel' && S.selectFor === it) { toast('Ese es el carrusel que estás armando'); return; }
     if (S.selecting) {
       S.selected.has(it.id) ? S.selected.delete(it.id) : S.selected.add(it.id);
       it.cell.classList.toggle('selected', S.selected.has(it.id));
@@ -558,7 +616,7 @@
   // ================= Importar =================
   $('#fileInput').addEventListener('change', e => { importFiles(e.target.files); e.target.value = ''; });
 
-  async function importFiles(fileList) {
+  async function importFiles(fileList, opts = {}) {
     const all = [...fileList];
     const files = all.filter(f => f.type.startsWith('image/') || isVideoFile(f) || /\.(heic|heif|jpe?g|png|webp)$/i.test(f.name));
     if (!files.length) {
@@ -600,8 +658,17 @@
         console.error(e); errors.push(`${f.name}: ${e && e.message || e}`);
       }
     }
-    S.order = [...newIds, ...S.order];
+    const into = opts.into && S.items.get(opts.into.id);
+    if (into && newIds.length) {
+      setSlides([...slidesOf(into).map(x => x.id), ...newIds], into.id);
+    } else S.order = [...newIds, ...S.order];
     saveOrder(); renderGrid();
+    if (into) {
+      const n = slidesOf(leaderOf(into)).length;
+      toast(errors.length ? `Se sumaron ${newIds.length}. No se pudo leer: ${errors.join(' · ')}` : `Carrusel: ${n} diapositivas${n > 20 ? ' (Instagram admite hasta 20)' : ''}`, false, errors.length ? 12000 : 3000);
+      if (newIds.length) openEditor(newIds[0]);
+      return;
+    }
     if (errors.length) {
       toast(`Se agregaron ${newIds.length}. No se pudo leer: ${errors.join(' · ')}`, false, 12000);
     } else {
@@ -632,13 +699,16 @@
   }
 
   // ---- publicación vacía ----
-  async function createBlank() {
+  async function createBlank(opts = {}) {
     const id = uid();
-    const it = { id, name: 'Publicación vacía', w: 1080, h: 1350, crop: { z: 1, cx: 0.5, cy: 0.5, rot: 0 }, adj: zeroAdj(), kind: 'blank', bg: BLANK_BG, texts: [] };
+    const into = opts.into && S.items.get(opts.into.id);
+    const bg = into && into.kind === 'blank' ? into.bg : BLANK_BG;   // en un carrusel, sigue con el mismo fondo
+    const it = { id, name: 'Publicación vacía', w: 1080, h: 1350, crop: { z: 1, cx: 0.5, cy: 0.5, rot: 0 }, adj: zeroAdj(), kind: 'blank', bg, texts: [] };
     it.thumb = solidImage(it.bg);
     await DB.put('items', meta(it)).catch(reportError);
     S.items.set(id, it);
-    S.order.unshift(id);
+    if (into) setSlides([...slidesOf(into).map(x => x.id), id], into.id);
+    else S.order.unshift(id);
     saveOrder(); renderGrid();
     await openEditor(id);
     saveItem(it);
@@ -647,10 +717,12 @@
   const photoInput = document.createElement('input');
   photoInput.type = 'file'; photoInput.accept = 'image/*,.heic,.heif'; photoInput.hidden = true;
   document.body.append(photoInput);
-  photoInput.addEventListener('change', async () => {
+  photoInput.addEventListener('change', () => {
     const f = photoInput.files[0]; photoInput.value = '';
-    const it = S.current; if (!f || !it) return;
-    if (isVideoFile(f)) { toast('Para videos usá + Agregar'); return; }
+    if (f && S.current) setPhoto(S.current, f);
+  });
+  async function setPhoto(it, f) {
+    if (isVideoFile(f)) { toast('Un video no puede ser la foto: soltalo en “Sumar al carrusel” o usá + Agregar', false, 5000); return; }
     try {
       toast('Cargando la foto…', true);
       const { orig, thumbBlob, w, h } = await readImageFile(f);
@@ -665,7 +737,7 @@
       drawThumb(it);
       toast('Foto lista');
     } catch (e) { console.error(e); toast('No se pudo leer la foto: ' + (e.message || e), false, 7000); }
-  });
+  }
   $('#photoBtn').addEventListener('click', () => photoInput.click());
 
   // ---- fondo de la publicación vacía ----
@@ -714,10 +786,30 @@
   window.addEventListener('dragenter', e => { if (hasFiles(e)) { dragDepth++; document.body.classList.add('dropping'); } });
   window.addEventListener('dragleave', e => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dropping'); } });
   window.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+  // Con una publicación abierta, el editor muestra dos zonas: poner como foto o sumar al carrusel.
+  // Soltar en la grilla (o en cualquier otro lado) crea publicaciones nuevas, como siempre.
+  const dropZones = $('#dropZones');
+  window.addEventListener('dragover', e => {
+    if (!hasFiles(e)) return;
+    const z = e.target.closest && e.target.closest('[data-drop]');
+    dropZones.querySelectorAll('.dz').forEach(d => d.classList.toggle('hot', d === z));
+  });
   window.addEventListener('drop', e => {
     if (!hasFiles(e)) return;
     e.preventDefault(); dragDepth = 0; document.body.classList.remove('dropping');
-    importFiles(e.dataTransfer.files);
+    const files = [...e.dataTransfer.files];
+    const z = e.target.closest && e.target.closest('[data-drop]');
+    dropZones.querySelectorAll('.dz').forEach(d => d.classList.remove('hot'));
+    const it = S.current;
+    if (z && it) {
+      if (z.dataset.drop === 'photo') {
+        const f = files.find(x => !isVideoFile(x)) || files[0];
+        if (files.length > 1) toast('Se usa la primera foto; para sumar varias, soltalas en “Sumar al carrusel”', false, 5000);
+        setPhoto(it, f);
+      } else importFiles(files, { into: leaderOf(it) });
+      return;
+    }
+    importFiles(files);
   });
 
   // ================= Archivos pesados (locales o desde la nube) =================
@@ -760,11 +852,13 @@
       const prev = S.video; S.video = null;
       flushFrame(prev).finally(() => closeVideo(prev.v));
     }
-    if (S.current && S.current.cell) S.current.cell.classList.remove('current');
+    for (const x of S.items.values()) if (x.cell) x.cell.classList.remove('current');
     if (S.current !== it) T.onItemChanged();
     S.current = it;
     T.renderLayers();
-    it.cell && it.cell.classList.add('current');
+    const lead = leaderOf(it);
+    lead.cell && lead.cell.classList.add('current');
+    renderStrip();
     document.body.classList.add('has-current', 'editing');
     syncControls(); updateTitle(); fitFrame(); requestRender();
     const isVid = it.kind === 'video';
@@ -870,7 +964,11 @@
 
   function updateTitle() {
     const it = S.current;
-    $('#editorTitle').textContent = it ? `Publicación ${S.order.indexOf(it.id) + 1} de ${S.order.length}${it.kind === 'video' ? ' · portada de video' : ''}` : '';
+    if (!it) { $('#editorTitle').textContent = ''; return; }
+    const lead = leaderOf(it), list = slidesOf(lead);
+    $('#editorTitle').textContent = `Publicación ${S.order.indexOf(lead.id) + 1} de ${S.order.length}`
+      + (list.length > 1 ? ` · diapositiva ${list.indexOf(it) + 1} de ${list.length}` : '')
+      + (it.kind === 'video' ? ' · portada de video' : '');
   }
 
   function fitFrame() {
@@ -1130,6 +1228,35 @@
     sliderUI[a.key] = { inp, out };
     $('#sliders').append(row);
   }
+  // Botones − / + junto al número de cada ajuste, para mover de a un paso (mantener apretado repite).
+  function addNudges(root) {
+    root.querySelectorAll('.slider').forEach(row => {
+      const inp = row.querySelector(':scope > input[type=range]'), lab = row.querySelector(':scope > label'), out = lab && lab.querySelector('output');
+      if (!inp || !out) return;
+      const head = document.createElement('div'); head.className = 'lbl';   // no <label>: si no, tocar el nombre apretaría el botón
+      head.append(...lab.childNodes); lab.replaceWith(head);
+      const wrap = document.createElement('span'); wrap.className = 'nudge';
+      const mk = (d, txt) => {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'nb'; b.textContent = txt;
+        b.setAttribute('aria-label', d > 0 ? 'Subir un paso' : 'Bajar un paso');
+        let t = 0;
+        const step = () => { const v = inp.value; d > 0 ? inp.stepUp() : inp.stepDown(); if (inp.value !== v) inp.dispatchEvent(new Event('input', { bubbles: true })); };
+        const stopRep = () => { clearTimeout(t); t = 0; };
+        b.addEventListener('pointerdown', e => {
+          e.preventDefault(); step(); stopRep();
+          const rep = () => { step(); t = setTimeout(rep, 55); };
+          t = setTimeout(rep, 420);
+        });
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, stopRep));
+        b.addEventListener('click', e => { if (e.detail === 0) step(); });   // teclado
+        b.addEventListener('contextmenu', e => e.preventDefault());
+        return b;
+      };
+      out.replaceWith(wrap);
+      wrap.append(mk(-1, '−'), out, mk(1, '+'));
+    });
+  }
+  addNudges($('#sliders')); addNudges($('#textPanel'));
   function syncControls() {
     const it = S.current; if (!it) return;
     for (const a of ADJ) {
@@ -1173,9 +1300,10 @@
   // pegar en varias
   // "Pegar en…": elegir publicaciones de la grilla para pegar el color o la capa copiada.
   function startSelect(mode = 'color') {
-    if (mode === 'color' ? !S.clip : !T.hasLayerClip()) return;
+    if (mode === 'color' ? !S.clip : mode === 'layer' ? !T.hasLayerClip() : !S.current) return;
     S.pasteMode = mode;
-    $('#selectApply').textContent = mode === 'layer' ? 'Pegar capa' : 'Pegar color';
+    S.selectFor = mode === 'carousel' ? leaderOf(S.current) : null;
+    $('#selectApply').textContent = mode === 'layer' ? 'Pegar capa' : mode === 'carousel' ? 'Sumar al carrusel' : 'Pegar color';
     S.selecting = true; S.selected.clear();
     document.body.classList.add('selecting');
     closeEditorMobile();
@@ -1193,17 +1321,28 @@
   }
   function updateSelectBar() {
     const n = S.selected.size;
-    $('#selectCount').textContent = n ? `${n} seleccionada${n > 1 ? 's' : ''}` : 'Tocá las fotos';
+    $('#selectCount').textContent = n ? `${n} seleccionada${n > 1 ? 's' : ''}` : S.pasteMode === 'carousel' ? 'Tocá las publicaciones a sumar' : 'Tocá las fotos';
     $('#selectApply').disabled = !n;
   }
   pasteManyBtn.addEventListener('click', () => startSelect('color'));
   $('#selectCancel').addEventListener('click', endSelect);
   $('#selectAll').addEventListener('click', () => {
-    S.order.forEach(id => { S.selected.add(id); S.items.get(id).cell.classList.add('selected'); });
+    S.order.forEach(id => { if (S.pasteMode === 'carousel' && S.selectFor && id === S.selectFor.id) return; S.selected.add(id); S.items.get(id).cell.classList.add('selected'); });
     updateSelectBar();
   });
   $('#selectApply').addEventListener('click', () => {
     const n = S.selected.size;
+    if (S.pasteMode === 'carousel') {
+      const lead = S.selectFor && S.items.get(S.selectFor.id);
+      if (!lead) { endSelect(); return; }
+      const add = S.order.filter(id => S.selected.has(id) && id !== lead.id).flatMap(id => slidesOf(S.items.get(id)).map(x => x.id));
+      const ids = [...slidesOf(lead).map(x => x.id), ...add];
+      endSelect();
+      setSlides(ids, lead.id); renderGrid();
+      openEditor(S.items.get(add[0]) ? add[0] : lead.id);
+      toast(`Carrusel: ${ids.length} diapositivas${ids.length > 20 ? ' (Instagram admite hasta 20)' : ''}`);
+      return;
+    }
     for (const id of S.selected) {
       const it = S.items.get(id);
       if (S.pasteMode === 'layer') T.pasteLayerInto(it);   // se suma arriba de las capas que ya tiene
@@ -1217,6 +1356,15 @@
   // eliminar
   $('#deleteBtn').addEventListener('click', async () => {
     const it = S.current; if (!it) return;
+    const lead = leaderOf(it), list = slidesOf(lead).map(x => x.id);
+    if (list.length > 1) {   // diapositiva de un carrusel: sólo se va esa
+      if (!confirm('¿Quitar esta diapositiva del carrusel? (Las demás quedan. El archivo original de tu equipo no se toca.)')) return;
+      const k = list.indexOf(it.id), rest = list.filter(id => id !== it.id);
+      setSlides(rest, lead.id);
+      await dropItem(it);
+      renderGrid(); openEditor(rest[Math.min(k, rest.length - 1)]);
+      return;
+    }
     if (!confirm('¿Sacar esta foto de la grilla? (El archivo original de tu equipo no se toca.)')) return;
     const idx = S.order.indexOf(it.id);
     S.order.splice(idx, 1); S.items.delete(it.id);
@@ -1230,6 +1378,93 @@
     saveOrder(); renderGrid();
     const next = S.order[Math.min(idx, S.order.length - 1)];
     if (next && !isNarrow()) openEditor(next); else closeEditorMobile();
+  });
+
+  async function dropItem(it) {
+    S.items.delete(it.id);
+    S.order = S.order.filter(id => id !== it.id);
+    if (S.full && S.full.id === it.id) S.full = null;
+    if (S.video && S.video.id === it.id) { clearTimeout(commitTimer); closeVideo(S.video.v); S.video = null; }
+    if (S.current === it) S.current = null;
+    await DB.remove(it.id).catch(reportError);
+    S.deleted.add(it.id);
+    if (Sync) Sync.trashItem(it);
+    saveOrder();
+  }
+
+  // ---- tira del carrusel (en el editor) ----
+  const stripEl = $('#slideStrip');
+  let stripSortable = null;
+  function renderStrip() {
+    const it = S.current;
+    if (!it) { stripEl.hidden = true; return; }
+    const lead = leaderOf(it), list = slidesOf(lead), multi = list.length > 1;
+    stripEl.hidden = false;
+    stripEl.classList.toggle('multi', multi);
+    const head = document.createElement('div'); head.className = 'sl-head';
+    head.innerHTML = `<span class="sl-title">${CAROUSEL_ICON}${multi ? `Carrusel · ${list.indexOf(it) + 1} de ${list.length}` : 'Carrusel'}</span>`
+      + (multi ? `<button class="chip" data-sl="detach" title="Sacar esta diapositiva del carrusel y dejarla como publicación aparte">Separar</button>` : '')
+      + `<button class="chip" data-sl="add" title="Sumar diapositivas: fotos, videos, una vacía o publicaciones de la grilla">+ Diapositiva</button>`;
+    const nodes = [head];
+    if (multi) {
+      const ul = document.createElement('div'); ul.className = 'sl-list';
+      list.forEach((x, i) => {
+        const th = document.createElement('button'); th.className = 'sl-th' + (x === it ? ' on' : ''); th.dataset.id = x.id;
+        th.title = `Diapositiva ${i + 1}`;
+        if (!x.stripCanvas) { x.stripCanvas = canvas(96, 120); drawThumb(x); }
+        const num = document.createElement('span'); num.className = 'sl-n'; num.textContent = i + 1;
+        th.append(x.stripCanvas, num);
+        if (x.kind === 'video') { const v = document.createElement('span'); v.className = 'sl-v'; v.textContent = '▶'; th.append(v); }
+        ul.append(th);
+      });
+      nodes.push(ul);
+      if (window.Sortable) {
+        stripSortable && stripSortable.destroy();
+        stripSortable = Sortable.create(ul, {
+          animation: 150, delay: 180, delayOnTouchOnly: true, touchStartThreshold: 6, direction: 'horizontal',
+          onEnd() {
+            const ids = [...ul.children].map(c => c.dataset.id);
+            if (ids.join() === list.map(x => x.id).join()) return;
+            setSlides(ids, lead.id); renderGrid(); renderStrip(); updateTitle();
+          },
+        });
+      }
+    } else if (stripSortable) { stripSortable.destroy(); stripSortable = null; }
+    stripEl.replaceChildren(...nodes);
+  }
+  stripEl.addEventListener('click', e => {
+    const th = e.target.closest('.sl-th');
+    if (th) { if (!S.current || th.dataset.id !== S.current.id) openEditor(th.dataset.id); return; }
+    const b = e.target.closest('[data-sl]'); if (!b || !S.current) return;
+    if (b.dataset.sl === 'add') $('#slideSheet').hidden = false;
+    else if (b.dataset.sl === 'detach') detachSlide(S.current);
+  });
+  function detachSlide(it) {
+    const lead = leaderOf(it), list = slidesOf(lead).map(x => x.id);
+    if (list.length < 2) return;
+    const rest = list.filter(id => id !== it.id);
+    const newLead = setSlides(rest, lead.id);
+    delete it.parent; delete it.slides; saveItem(it);
+    S.order.splice(S.order.indexOf(newLead.id) + 1, 0, it.id);
+    saveOrder(); renderGrid(); openEditor(it.id);
+    toast('Ahora es una publicación aparte, al lado del carrusel');
+  }
+  const slideInput = document.createElement('input');
+  slideInput.type = 'file'; slideInput.accept = $('#fileInput').accept; slideInput.multiple = true; slideInput.hidden = true;
+  document.body.append(slideInput);
+  slideInput.addEventListener('change', () => {
+    const fs = [...slideInput.files]; slideInput.value = '';
+    if (fs.length && S.current) importFiles(fs, { into: leaderOf(S.current) });
+  });
+  $('#slideSheet').addEventListener('click', e => {
+    const b = e.target.closest('button'), sh = $('#slideSheet');
+    if (!b && e.target !== sh) return;
+    sh.hidden = true;
+    if (!b || !S.current) return;
+    const lead = leaderOf(S.current);
+    if (b.dataset.sl === 'files') slideInput.click();
+    else if (b.dataset.sl === 'blank') createBlank({ into: lead });
+    else if (b.dataset.sl === 'grid') { if (S.order.length < 2) toast('No hay otras publicaciones en la grilla'); else startSelect('carousel'); }
   });
 
   // ================= Exportar / descargar =================
@@ -1287,8 +1522,19 @@
 
   $('#downloadBtn').addEventListener('click', async () => {
     const it = S.current; if (!it) return;
-    toast('Preparando…', true);
+    const list = slidesOf(leaderOf(it));
     try {
+      if (list.length > 1) {   // carrusel: todas las diapositivas, numeradas en orden
+        const files = [], base = baseName(list[0].name);
+        for (let i = 0; i < list.length; i++) {
+          toast(`Preparando ${i + 1} de ${list.length}…`, true);
+          files.push(new File([await exportItem(list[i])], `${base}-carrusel-${String(i + 1).padStart(2, '0')}.jpg`, { type: 'image/jpeg' }));
+        }
+        toast('Listas — numeradas en el orden del carrusel');
+        await deliver(files);
+        return;
+      }
+      toast('Preparando…', true);
       const blob = await exportItem(it);
       toast('Lista');
       const suffix = it.kind === 'video' ? 'portada-1080x1350' : '1080x1350';
@@ -1303,8 +1549,11 @@
     try {
       for (let i = 0; i < ids.length; i++) {
         toast(`Preparando ${i + 1} de ${ids.length}…`, true);
-        const blob = await exportItem(S.items.get(ids[i]));
-        files.push(new File([blob], `mosaico-${String(i + 1).padStart(2, '0')}.jpg`, { type: 'image/jpeg' }));
+        const list = slidesOf(S.items.get(ids[i])), n = String(i + 1).padStart(2, '0');
+        for (let k = 0; k < list.length; k++) {
+          const blob = await exportItem(list[k]);
+          files.push(new File([blob], list.length > 1 ? `mosaico-${n}-${k + 1}.jpg` : `mosaico-${n}.jpg`, { type: 'image/jpeg' }));
+        }
       }
       toast('Listas — numeradas en el orden en que hay que publicarlas');
       await deliver(files);
@@ -1322,7 +1571,10 @@
     else if (mod && e.key.toLowerCase() === 'v' && S.clip) { pasteAdj(); e.preventDefault(); }
     else if (e.key === 'Escape' && S.selecting) endSelect();
     else if (!mod && tag !== 'input' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft') && S.current) {
-      const i = S.order.indexOf(S.current.id) + (e.key === 'ArrowRight' ? 1 : -1);
+      const d = e.key === 'ArrowRight' ? 1 : -1, lead = leaderOf(S.current), list = slidesOf(lead);
+      const k = list.indexOf(S.current) + d;
+      if (list.length > 1 && list[k]) { openEditor(list[k].id); return; }
+      const i = S.order.indexOf(lead.id) + d;
       if (S.order[i]) openEditor(S.order[i]);
     }
   });
@@ -1346,6 +1598,7 @@
       closeEditorMobile();
     }
     DB.remove(id).catch(reportError);
+    if (S.current) renderStrip();
   }
   // Lo que el módulo de sincronización necesita de la app.
   let storageWarned = false;
@@ -1372,6 +1625,7 @@
       for (const id of S.order) if (S.items.has(id) && !next.includes(id)) next.unshift(id);
       const changed = next.join() !== S.order.join();
       S.order = next;
+      normalizeOrder();
       S.orderDirty = !!keepDirty && S.orderDirty;
       persistOrder();
       if (changed) renderGridSoon();
@@ -1398,6 +1652,9 @@
     async updateRemoteItem(it, m, thumbBlob) {
       const wasT = it.t;
       Object.assign(it, { name: m.name, w: m.w, h: m.h, crop: { rot: 0, ...m.crop }, adj: { ...zeroAdj(), ...m.adj }, texts: m.texts !== undefined ? m.texts : (it.texts || []), kind: m.kind, duration: m.duration, t: m.t, sync: m.sync });
+      const famBefore = JSON.stringify([it.parent, it.slides]);
+      for (const k of ['parent', 'slides']) { if (m[k] == null) delete it[k]; else it[k] = m[k]; }
+      if (JSON.stringify([it.parent, it.slides]) !== famBefore) { renderGridSoon(); if (S.current) { renderStrip(); updateTitle(); } }
       if (m.kind === 'blank') {
         it.bg = m.bg; it.thumb = solidImage(m.bg);
         if (S.full && S.full.id === it.id) S.full = { id: it.id, img: it.thumb, w: 40, h: 50 };

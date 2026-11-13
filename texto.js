@@ -490,10 +490,66 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (d) h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
     return { h: h * 60, s: mx ? d / mx : 0, v: mx };
   }
+  // ---- gotero ----
+  // En Chrome/Edge de compu toma cualquier color de la pantalla. En Safari y en el celular,
+  // se toca (o se arrastra el dedo) sobre la foto o sobre las miniaturas de la grilla.
+  const DROPPER_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19.4 4.6a2.4 2.4 0 0 0-3.4 0l-2.3 2.3-1-1-1.6 1.6 1 1L5 15.6V19h3.4l7.1-7.1 1 1 1.6-1.6-1-1 2.3-2.3a2.4 2.4 0 0 0 0-3.4z"/></svg>';
+  let dropping = null;
+  function canvasAt(x, y) {
+    for (const n of document.elementsFromPoint(x, y)) {
+      if (n instanceof HTMLCanvasElement) return n;
+      if (n.closest && n.closest('.cpick, .tools .row, header')) return null;
+    }
+    return null;
+  }
+  function sampleAt(x, y) {
+    const c = canvasAt(x, y); if (!c || !c.width) return null;
+    const r = c.getBoundingClientRect();
+    const px = clamp(Math.floor((x - r.left) / r.width * c.width), 0, c.width - 1), py = clamp(Math.floor((y - r.top) / r.height * c.height), 0, c.height - 1);
+    try { const ctx = c.getContext('2d'); if (!ctx) return null; const d = ctx.getImageData(px, py, 1, 1).data; return d[3] ? toHex(d[0], d[1], d[2]) : null; } catch { return null; }
+  }
+  async function pickFromScreen(live, done) {
+    if (dropping) dropping.end();
+    if (window.EyeDropper) {
+      try { const r = await new EyeDropper().open(); live(r.sRGBHex); done(r.sRGBHex); } catch { }
+      return;
+    }
+    A.toast('Gotero: tocá (o arrastrá) sobre la foto o la grilla', true);
+    document.body.classList.add('eyedrop');
+    let active = false, last = null;
+    const stop = e => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); };
+    const down = e => {
+      const hex = sampleAt(e.clientX, e.clientY);
+      if (!hex) { if (!(e.target.closest && e.target.closest('.cp-drop'))) end(); return; }
+      stop(e); active = true; last = hex; live(hex);
+    };
+    const move = e => { if (!active) return; stop(e); const hex = sampleAt(e.clientX, e.clientY); if (hex && hex !== last) { last = hex; live(hex); } };
+    const up = e => {
+      if (!active) return; stop(e);
+      const blockClick = ev => { ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); };
+      window.addEventListener('click', blockClick, true);
+      setTimeout(() => window.removeEventListener('click', blockClick, true), 400);
+      done(last); end(); A.toast('Color tomado');
+    };
+    const key = e => { if (e.key === 'Escape') { end(); A.toast('Gotero cancelado'); } };
+    const opts = { capture: true, passive: false };
+    function end() {
+      window.removeEventListener('pointerdown', down, opts); window.removeEventListener('pointermove', move, opts);
+      window.removeEventListener('pointerup', up, opts); window.removeEventListener('pointercancel', up, opts);
+      window.removeEventListener('keydown', key, true);
+      document.body.classList.remove('eyedrop'); dropping = null;
+    }
+    setTimeout(() => {   // después del toque que abrió el gotero
+      window.addEventListener('pointerdown', down, opts); window.addEventListener('pointermove', move, opts);
+      window.addEventListener('pointerup', up, opts); window.addEventListener('pointercancel', up, opts);
+      window.addEventListener('keydown', key, true);
+    }, 0);
+    dropping = { end };
+  }
   function makePicker({ get, set, commit, onOpen, target = cur, onChange = changed }) {
     const el = document.createElement('div'); el.className = 'cpick'; el.hidden = true;
     el.innerHTML = `<div class="cp-sv"><div class="cp-dot"></div></div><div class="cp-hue"><div class="cp-hdot"></div></div>
-      <div class="cp-row"><span class="cp-prev"></span><input class="cp-hex" maxlength="7" spellcheck="false" aria-label="Código de color"><button class="chip cp-ok">Listo</button></div>`;
+      <div class="cp-row"><span class="cp-prev"></span><input class="cp-hex" maxlength="7" spellcheck="false" aria-label="Código de color"><button class="chip cp-drop" title="Gotero: tomar un color de la pantalla" aria-label="Gotero">${DROPPER_ICON}</button><button class="chip cp-ok">Listo</button></div>`;
     const sv = el.querySelector('.cp-sv'), dot = el.querySelector('.cp-dot'), hue = el.querySelector('.cp-hue'), hdot = el.querySelector('.cp-hdot');
     const prev = el.querySelector('.cp-prev'), hexIn = el.querySelector('.cp-hex');
     let hsv = { h: 0, s: 0, v: 1 };
@@ -525,6 +581,10 @@ window.createMosaicoText = function createMosaicoText(A) {
     });
     hexIn.addEventListener('change', () => commit && commit(paint()));
     el.querySelector('.cp-ok').addEventListener('click', () => { el.hidden = true; });
+    el.querySelector('.cp-drop').addEventListener('click', () => {
+      if (!target()) return;
+      pickFromScreen(hex => { hsv = hex2hsv(hex); apply(); }, () => commit && commit(paint()));
+    });
     return {
       el,
       toggle() { el.hidden = !el.hidden; if (!el.hidden) { onOpen && onOpen(); this.refresh(); } },
@@ -554,7 +614,9 @@ window.createMosaicoText = function createMosaicoText(A) {
   const sub = (key, prop, dflt) => ({ get: L => (L[key] && L[key][prop] != null ? L[key][prop] : dflt), set: (L, v) => { L[key] = { ...clone(DEFAULT[key]), ...(L[key] || {}) }; L[key][prop] = v; } });
   const pct = v => Math.round(v) + '%';
 
-  slider($('#tSizeRot'), { label: 'Tamaño', min: 12, max: 400, get: L => Math.round(L.size * 1000), set: (L, v) => { L.size = v / 1000; }, fmt: v => (v / 10).toFixed(1) });
+  // Tamaño: la barra no es pareja, así en los tamaños chicos y medianos (los que más se usan) se mueve más fino.
+  const SZ0 = 12, SZ1 = 450, szFromPos = p => SZ0 + (SZ1 - SZ0) * (p / 1000) ** 2, posFromSz = z => Math.round(Math.sqrt(clamp((z - SZ0) / (SZ1 - SZ0), 0, 1)) * 1000);
+  slider($('#tSizeRot'), { label: 'Tamaño', min: 0, max: 1000, get: L => posFromSz(L.size * 1000), set: (L, v) => { L.size = szFromPos(v) / 1000; }, fmt: v => (szFromPos(v) / 10).toFixed(1) });
   slider($('#tSizeRot'), { label: 'Giro', min: -180, max: 180, step: 0.5, get: L => L.rot || 0, set: (L, v) => { L.rot = snapRot(v); }, fmt: v => (Math.abs(v) < 0.05 ? '0' : v > 0 ? '+' + v : v) + '°' });
   slider($('#tLook'), { label: 'Opacidad', min: 5, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct });
   {
@@ -565,8 +627,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     refreshers.push(L => { sl.value = BLENDS[L.blend] ? L.blend : 'source-over'; });
     $('#tLook').append(row);
   }
-  slider($('#tLook'), { label: 'Interletrado', min: -100, max: 400, step: 5, get: L => L.letter || 0, set: (L, v) => { L.letter = v; }, fmt: v => (v > 0 ? '+' : '') + v });
-  slider($('#tLook'), { label: 'Interlineado', min: 70, max: 250, step: 5, get: L => Math.round((L.line || 1.2) * 100), set: (L, v) => { L.line = v / 100; }, fmt: v => (v / 100).toFixed(2) });
+  slider($('#tLook'), { label: 'Interletrado', min: -100, max: 300, step: 1, get: L => L.letter || 0, set: (L, v) => { L.letter = v; }, fmt: v => (v > 0 ? '+' : '') + v });
+  slider($('#tLook'), { label: 'Interlineado', min: 70, max: 250, step: 1, get: L => Math.round((L.line || 1.2) * 100), set: (L, v) => { L.line = v / 100; }, fmt: v => (v / 100).toFixed(2) });
   section($('#tShadow'), {
     label: 'Sombra', key: 'shadow', build: b => {
       const s = sub.bind(null, 'shadow');

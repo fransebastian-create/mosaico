@@ -325,7 +325,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
   const folderUrl = () => st.project ? `https://drive.google.com/drive/folders/${st.project.id}` : null;
 
   // ---------------- Sincronización ----------------
-  const metaFields = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: (it.texts || []).map(({ _box, ...L }) => L), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t });
+  const metaFields = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: (it.texts || []).map(({ _box, ...L }) => L), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, parent: it.parent || null, slides: it.slides || null });
 
   // ---- tipografías propias: archivos en archivos/ con appProperties (rol "font") ----
   async function pushFonts() {
