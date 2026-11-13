@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.2';
+  const VERSION = 'v1.3';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -134,7 +134,7 @@
   };
 
   const cleanTexts = ts => (ts || []).map(({ _box, ...L }) => L);
-  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), kind: it.kind || 'image', duration: it.duration, t: it.t, sync: it.sync || null });
+  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, sync: it.sync || null });
   let Sync = null;   // sincronización con Google Drive (drive.js)
   const saveTimers = new Map();
   function saveItem(it) {
@@ -164,6 +164,14 @@
     });
   }
   function canvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+  // Publicación vacía: el "fondo" es una imagen chiquita de un color liso (se estira sin perder nada).
+  const BLANK_BG = '#efe9df';
+  function solidImage(color) {
+    const c = canvas(40, 50), x = c.getContext('2d');
+    x.fillStyle = color || BLANK_BG; x.fillRect(0, 0, 40, 50);
+    c.naturalWidth = 40; c.naturalHeight = 50;
+    return c;
+  }
   function toBlob(c, type = 'image/jpeg', q = 0.95) {
     return new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('no se pudo generar la imagen')), type, q));
   }
@@ -580,23 +588,7 @@
         continue;
       }
       try {
-        let src = f, img;
-        try { img = await loadImage(f); }
-        catch (e) {
-          if (!isHeic(f)) throw e;
-          toast(`Convirtiendo foto HEIC ${i + 1} de ${files.length}…`, true);
-          src = await heicToJpeg(f);
-          img = await loadImage(src);
-        }
-        let w = img.naturalWidth, h = img.naturalHeight;
-        let orig = new Blob([await src.arrayBuffer()], { type: src.type || 'image/jpeg' });
-        if (Math.max(w, h) > MAX_SRC) {
-          const c = downscale(img, w, h, MAX_SRC);
-          orig = await toBlob(c, 'image/jpeg', 0.95);
-          w = c.width; h = c.height; c.width = 0;
-        }
-        const tc = downscale(img, img.naturalWidth, img.naturalHeight, THUMB_SRC);
-        const thumbBlob = await toBlob(tc, 'image/jpeg', 0.9); tc.width = 0;
+        const { orig, thumbBlob, w, h } = await readImageFile(f, `Convirtiendo foto HEIC ${i + 1} de ${files.length}…`);
         const id = uid();
         const it = { id, name: f.name || 'foto.jpg', w, h, crop: { z: 1, cx: 0.5, cy: 0.5, rot: 0 }, adj: zeroAdj() };
         await DB.put('blobs', { id, orig, thumb: thumbBlob });
@@ -616,6 +608,104 @@
     }
     if (newIds.length && !isNarrow()) openEditor(newIds[0]);
   }
+
+  async function readImageFile(f, heicMsg) {
+    let src = f, img;
+    try { img = await loadImage(f); }
+    catch (e) {
+      if (!isHeic(f)) throw e;
+      toast(heicMsg || 'Convirtiendo foto HEIC…', true);
+      src = await heicToJpeg(f);
+      img = await loadImage(src);
+    }
+    let w = img.naturalWidth, h = img.naturalHeight;
+    let orig = new Blob([await src.arrayBuffer()], { type: src.type || 'image/jpeg' });
+    if (Math.max(w, h) > MAX_SRC) {
+      const c = downscale(img, w, h, MAX_SRC);
+      orig = await toBlob(c, 'image/jpeg', 0.95);
+      w = c.width; h = c.height; c.width = 0;
+    }
+    const tc = downscale(img, img.naturalWidth, img.naturalHeight, THUMB_SRC);
+    const thumbBlob = await toBlob(tc, 'image/jpeg', 0.9); tc.width = 0;
+    return { orig, thumbBlob, w, h };
+  }
+
+  // ---- publicación vacía ----
+  async function createBlank() {
+    const id = uid();
+    const it = { id, name: 'Publicación vacía', w: 1080, h: 1350, crop: { z: 1, cx: 0.5, cy: 0.5, rot: 0 }, adj: zeroAdj(), kind: 'blank', bg: BLANK_BG, texts: [] };
+    it.thumb = solidImage(it.bg);
+    await DB.put('items', meta(it)).catch(reportError);
+    S.items.set(id, it);
+    S.order.unshift(id);
+    saveOrder(); renderGrid();
+    await openEditor(id);
+    saveItem(it);
+  }
+  // ---- poner o cambiar la foto de una publicación (los textos y el color quedan) ----
+  const photoInput = document.createElement('input');
+  photoInput.type = 'file'; photoInput.accept = 'image/*,.heic,.heif'; photoInput.hidden = true;
+  document.body.append(photoInput);
+  photoInput.addEventListener('change', async () => {
+    const f = photoInput.files[0]; photoInput.value = '';
+    const it = S.current; if (!f || !it) return;
+    if (isVideoFile(f)) { toast('Para videos usá + Agregar'); return; }
+    try {
+      toast('Cargando la foto…', true);
+      const { orig, thumbBlob, w, h } = await readImageFile(f);
+      await DB.put('blobs', { id: it.id, orig, thumb: thumbBlob });
+      Object.assign(it, { kind: 'image', w, h, name: f.name || 'foto.jpg', crop: { z: 1, cx: 0.5, cy: 0.5, rot: 0 } });
+      delete it.bg;
+      if (it.sync && it.sync.media && it.sync.media.orig) it.sync.mediaDirty = true;   // ya había foto en la nube: se reemplaza
+      it.thumb = await loadImage(thumbBlob);
+      S.full = null;
+      saveItem(it);
+      await openEditor(it.id);
+      drawThumb(it);
+      toast('Foto lista');
+    } catch (e) { console.error(e); toast('No se pudo leer la foto: ' + (e.message || e), false, 7000); }
+  });
+  $('#photoBtn').addEventListener('click', () => photoInput.click());
+
+  // ---- fondo de la publicación vacía ----
+  const BG_BASE = ['#ffffff', BLANK_BG, '#d9cbb8', '#2b2a28', '#000000'];
+  const bgColorsEl = $('#bgColors');
+  function setBlankBg(it, c) {
+    it.bg = c; it.thumb = solidImage(c);
+    if (S.current === it) S.full = { id: it.id, img: it.thumb, w: 40, h: 50 };
+    requestRender(); saveItem(it);
+  }
+  const bgPicker = T.colorPicker({
+    target: () => S.current && S.current.kind === 'blank' ? S.current : null,
+    get: it => it.bg || BLANK_BG,
+    set: (it, c) => setBlankBg(it, c),
+    onChange: () => { },
+    commit: c => { T.addToPalette(c); renderBgSwatches(); },
+  });
+  bgColorsEl.after(bgPicker.el);
+  function renderBgSwatches() {
+    const it = S.current; if (!it || it.kind !== 'blank') return;
+    const now = (it.bg || BLANK_BG).toLowerCase();
+    const list = [...new Set([...BG_BASE, ...T.palette()])];
+    bgColorsEl.innerHTML = list.map(c => `<button class="sw${c === now ? ' on' : ''}" data-c="${c}" style="--c:${c}" title="${c}"></button>`).join('')
+      + `<button class="sw pick" title="Elegir otro color (arrastrá para ver en vivo)"></button>`;
+  }
+  bgColorsEl.addEventListener('click', e => {
+    const b = e.target.closest('button.sw'), it = S.current; if (!b || !it || it.kind !== 'blank') return;
+    if (b.classList.contains('pick')) { bgPicker.toggle(); return; }
+    setBlankBg(it, b.dataset.c); renderBgSwatches(); bgPicker.refresh();
+  });
+
+  // ---- menú + Agregar ----
+  $('#addBtn').addEventListener('click', () => { $('#addSheet').hidden = false; });
+  $('#addSheet').addEventListener('click', e => {
+    const b = e.target.closest('button'), sh = $('#addSheet');
+    if (!b && e.target !== sh) return;
+    sh.hidden = true;
+    if (!b) return;
+    if (b.dataset.add === 'files') $('#fileInput').click();
+    else if (b.dataset.add === 'blank') createBlank();
+  });
 
   // arrastrar archivos desde la compu
   let dragDepth = 0;
@@ -680,6 +770,16 @@
     if (isVid) {
       frameInput.value = it.duration ? Math.round((it.t || 0) / it.duration * 1000) : 0;
       frameOut.textContent = fmtTime(it.t || 0);
+    }
+    const blank = it.kind === 'blank';
+    document.body.classList.toggle('is-blank', blank);
+    $('#photoBtn').hidden = isVid;
+    $('#photoBtn').textContent = blank ? '+ Poner foto' : 'Cambiar foto';
+    if (blank) {
+      S.full = { id, img: it.thumb, w: 40, h: 50 };
+      renderBgSwatches(); bgPicker.refresh();
+      requestRender();
+      return;
     }
     try {
       if (!S.full || S.full.id !== id) {
@@ -1142,6 +1242,7 @@
       s = videoSource(it);
     }
     if (s) { /* fotograma actual del video */ }
+    else if (it.kind === 'blank') s = { img: solidImage(it.bg), w: 40, h: 50 };
     else if (S.full && S.full.id === it.id) s = S.full;
     else {
       const img = await loadImage(await getOrigBlob(it));
@@ -1279,6 +1380,14 @@
     async addRemoteItem(m, thumbBlob) {
       if (S.items.has(m.id) || S.deleted.has(m.id)) return;
       const it = { ...m, adj: { ...zeroAdj(), ...m.adj }, crop: { rot: 0, ...m.crop } };
+      if (m.kind === 'blank') {
+        it.thumb = solidImage(m.bg);
+        S.items.set(it.id, it);
+        if (!S.order.includes(it.id)) S.order.unshift(it.id);
+        renderGridSoon();
+        await saveLocalSafe(() => DB.put('items', meta(it)));
+        return;
+      }
       it.thumb = await loadImage(thumbBlob);
       S.items.set(it.id, it);
       if (!S.order.includes(it.id)) S.order.unshift(it.id);
@@ -1290,6 +1399,10 @@
     async updateRemoteItem(it, m, thumbBlob) {
       const wasT = it.t;
       Object.assign(it, { name: m.name, w: m.w, h: m.h, crop: { rot: 0, ...m.crop }, adj: { ...zeroAdj(), ...m.adj }, texts: m.texts !== undefined ? m.texts : (it.texts || []), kind: m.kind, duration: m.duration, t: m.t, sync: m.sync });
+      if (m.kind === 'blank') {
+        it.bg = m.bg; it.thumb = solidImage(m.bg);
+        if (S.full && S.full.id === it.id) S.full = { id: it.id, img: it.thumb, w: 40, h: 50 };
+      } else delete it.bg;
       if (thumbBlob) {
         it.thumb = await loadImage(thumbBlob);
         await saveLocalSafe(() => DB.put('blobs', { id: it.id, thumb: thumbBlob }));   // cambió la portada: el original viejo ya no sirve
@@ -1567,6 +1680,7 @@
     await Promise.all(S.order.map(async id => {
       const it = S.items.get(id);
       try {
+        if (it.kind === 'blank') { it.thumb = solidImage(it.bg); drawThumb(it); return; }
         const b = await DB.get('blobs', id);
         it.thumb = await loadImage(b.thumb);
         drawThumb(it);

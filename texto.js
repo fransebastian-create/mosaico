@@ -490,7 +490,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (d) h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
     return { h: h * 60, s: mx ? d / mx : 0, v: mx };
   }
-  function makePicker({ get, set, commit, onOpen }) {
+  function makePicker({ get, set, commit, onOpen, target = cur, onChange = changed }) {
     const el = document.createElement('div'); el.className = 'cpick'; el.hidden = true;
     el.innerHTML = `<div class="cp-sv"><div class="cp-dot"></div></div><div class="cp-hue"><div class="cp-hdot"></div></div>
       <div class="cp-row"><span class="cp-prev"></span><input class="cp-hex" maxlength="7" spellcheck="false" aria-label="Código de color"><button class="chip cp-ok">Listo</button></div>`;
@@ -506,7 +506,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       if (document.activeElement !== hexIn) hexIn.value = hex;
       return hex;
     }
-    function apply() { const L = cur(); if (!L) return; set(L, paint()); changed(); }
+    function apply() { const L = target(); if (!L) return; set(L, paint()); onChange(L); }
     function drag(target, onPos) {
       target.addEventListener('pointerdown', e => {
         e.preventDefault();
@@ -528,7 +528,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     return {
       el,
       toggle() { el.hidden = !el.hidden; if (!el.hidden) { onOpen && onOpen(); this.refresh(); } },
-      refresh() { const L = cur(); if (!L || el.hidden) return; const now = hex2hsv(get(L)); if (hsv2hex(hsv.h, hsv.s, hsv.v) !== get(L).toLowerCase()) hsv = now; paint(); },
+      refresh() { const L = target(); if (!L || el.hidden) return; const now = hex2hsv(get(L)); if (hsv2hex(hsv.h, hsv.s, hsv.v) !== get(L).toLowerCase()) hsv = now; paint(); },
     };
   }
   function colorInput(parent, { label, get, set }) {
@@ -722,6 +722,10 @@ window.createMosaicoText = function createMosaicoText(A) {
     onItemChanged() { if (sel) select(null); },
     refresh() { if (sel && !cur()) select(null); else { syncPanel(); } },
     hasSelection: () => !!cur(),
+    // selector de color y paleta compartida, para otros controles (p. ej. el fondo de una publicación vacía)
+    colorPicker: opts => makePicker(opts),
+    palette: () => lib.palette.slice(),
+    addToPalette(c) { c = (c || '').toLowerCase(); if (!/^#[0-9a-f]{6}$/.test(c) || BASE_COLORS.includes(c)) return; lib.palette = [c, ...lib.palette.filter(x => x !== c)].slice(0, 12); libChanged(); },
     // para la nube
     library: {
       get: () => ({ styles: lib.styles, deletedStyles: lib.deletedStyles, deletedFonts: lib.deletedFonts, palette: lib.palette, dirty: lib.dirty, gen: lib.gen }),

@@ -409,3 +409,9 @@ body.text-mode .tools > :not(#textPanel) { display: none; }
 }
 .prow .pw b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #projSheet .cloud-card .row .btn { flex: 1; justify-content: center; }
+
+/* ---------- publicación vacía ---------- */
+.bg-row { display: none; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+body.is-blank .bg-row { display: flex; }
+body.is-blank .slider.zoom, body.is-blank .rotate-row { display: none; }
+#photoBtn[hidden] { display: none; }

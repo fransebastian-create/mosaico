@@ -325,7 +325,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
   const folderUrl = () => st.project ? `https://drive.google.com/drive/folders/${st.project.id}` : null;
 
   // ---------------- Sincronización ----------------
-  const metaFields = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: (it.texts || []).map(({ _box, ...L }) => L), kind: it.kind || 'image', duration: it.duration, t: it.t });
+  const metaFields = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: (it.texts || []).map(({ _box, ...L }) => L), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t });
 
   // ---- tipografías propias: archivos en archivos/ con appProperties (rol "font") ----
   async function pushFonts() {
@@ -385,16 +385,17 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     const gen = it._gen || 0;
     const A = st.project.archivosId;
     const props = role => ({ mosaicoId: it.id, mosaicoRole: role });
-    const blobs = await app.getBlobs(it.id);
-    if (!blobs) return;
-    if (!s.media.orig && blobs.orig) {
+    const blank = it.kind === 'blank';   // publicación vacía: sólo datos (fondo y textos), sin archivos
+    const blobs = blank ? null : await app.getBlobs(it.id);
+    if (!blobs && !blank) return;
+    if (blobs && !s.media.orig && blobs.orig) {
       setPhase('syncing', 'Subiendo ' + it.name);
       s.media.orig = (await uploadNew({ name: `${it.id}-original.jpg`, parents: [A], appProperties: props('orig') }, blobs.orig,
         (d, t) => setPhase('syncing', `Subiendo ${it.name} · ${Math.floor(d / t * 100)}%`))).id;
       s.media.thumb = (await uploadNew({ name: `${it.id}-miniatura.jpg`, parents: [A], appProperties: props('thumb') }, blobs.thumb)).id;
       s.mediaDirty = false;
       app.persist(it);
-    } else if (s.mediaDirty && blobs.orig) {
+    } else if (blobs && s.mediaDirty && blobs.orig) {
       setPhase('syncing', 'Subiendo portada de ' + it.name);
       await updateContent(s.media.orig, blobs.orig);
       await updateContent(s.media.thumb, blobs.thumb);
@@ -424,7 +425,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
         app.persist(it);
       }
     }
-    if (!s.media.orig) return;   // todavía no hay original local (p. ej. llegó de otra persona sin abrir)
+    if (!s.media.orig && !blank) return;   // todavía no hay original local (p. ej. llegó de otra persona sin abrir)
     const doc = { ...metaFields(it), media: s.media, mediaRev: s.mediaRev || 0, updatedAt: Date.now(), updatedBy: st.user && st.user.email };
     if (!s.jsonId) {
       const r = await uploadNew({ name: `item-${it.id}.json`, parents: [st.project.datosId], appProperties: { mosaicoId: it.id, mosaicoRole: 'item' } }, jsonBlob(doc));
@@ -490,11 +491,13 @@ window.createMosaicoSync = function createMosaicoSync(app) {
       const syncInfo = { project: P.id, jsonId: f.id, media: doc.media || {}, mediaRev: doc.mediaRev || 0, dirty: false, mediaDirty: false, remoteUpdatedAt: doc.updatedAt };
       if (!it) {
         setPhase('syncing', `Bajando ${n} de ${total} · ${doc.name}`);
-        if (!doc.media || !doc.media.thumb) { log('Sin miniatura todavía: ' + doc.name); continue; }
-        const thumb = await download(doc.media.thumb, 60000);
+        if (doc.kind !== 'blank' && (!doc.media || !doc.media.thumb)) { log('Sin miniatura todavía: ' + doc.name); continue; }
+        const thumb = doc.kind === 'blank' ? null : await download(doc.media.thumb, 60000);
         await withTimeout(app.addRemoteItem({ ...metaFields(doc), sync: syncInfo }, thumb), 30000, 'guardando ' + doc.name + ' en el teléfono');
       } else {
-        const mediaChanged = (doc.mediaRev || 0) > ((it.sync && it.sync.mediaRev) || 0) || !it.sync;
+        const hadThumb = !!(it.sync && it.sync.media && it.sync.media.thumb);
+        const mediaChanged = doc.kind !== 'blank' && doc.media && doc.media.thumb &&
+          ((doc.mediaRev || 0) > ((it.sync && it.sync.mediaRev) || 0) || !it.sync || !hadThumb || it.kind === 'blank');
         const thumb = mediaChanged ? await download(doc.media.thumb, 60000) : null;
         await withTimeout(app.updateRemoteItem(it, { ...metaFields(doc), sync: syncInfo }, thumb), 30000, 'actualizando ' + doc.name);
       }
