@@ -195,21 +195,28 @@ window.createMosaicoText = function createMosaicoText(A) {
       ctx.shadowColor = 'transparent';
       drawLines(ctx, m, L.align, false);
     } else if (wt < 0) {
-      // más fina: se dibuja aparte y se le "come" un borde parejo a cada letra
-      const ew = -wt / 100 * m.fontPx * 0.05;
+      // más fina: se dibuja aparte (con el doble de resolución y alineada a los píxeles, para que no se vea borrosa)
+      // y se le "come" un borde parejo a cada letra
+      const k = 2, ew = (-wt / 100) * m.fontPx * 0.035;
       const pad = Math.ceil(m.fontPx * 0.6 + ew);
       const bw = Math.ceil(m.maxW + Math.abs(m.track) * 2) + pad * 2, bh = Math.ceil(m.h) + pad * 2;
+      const T0 = ctx.getTransform();
+      const straight = Math.abs(T0.b) < 1e-6 && Math.abs(T0.c) < 1e-6 && T0.a > 0 && T0.d > 0;
+      // posición (en coordenadas de la capa) donde va la esquina del dibujo aparte, sobre un píxel entero
+      const px = straight ? (Math.round(T0.e - bw / 2 * T0.a) - T0.e) / T0.a : -bw / 2;
+      const py = straight ? (Math.round(T0.f - bh / 2 * T0.d) - T0.f) / T0.d : -bh / 2;
       const oc = thinCanvas || (thinCanvas = document.createElement('canvas'));
-      if (oc.width < bw || oc.height < bh) { oc.width = Math.max(oc.width, bw); oc.height = Math.max(oc.height, bh); }
+      if (oc.width < bw * k || oc.height < bh * k) { oc.width = Math.max(oc.width, bw * k); oc.height = Math.max(oc.height, bh * k); }
       const o = oc.getContext('2d');
       o.setTransform(1, 0, 0, 1, 0, 0); o.globalCompositeOperation = 'source-over'; o.clearRect(0, 0, oc.width, oc.height);
-      o.translate(bw / 2, bh / 2);
+      o.setTransform(k, 0, 0, k, -px * k, -py * k);
       o.font = ctx.font; o.textBaseline = 'middle'; o.fillStyle = ctx.fillStyle;
       drawLines(o, m, L.align, false);
       o.globalCompositeOperation = 'destination-out';
       o.lineJoin = 'round'; o.lineWidth = ew; o.strokeStyle = '#000';
       drawLines(o, m, L.align, true);
-      ctx.drawImage(oc, 0, 0, bw, bh, -bw / 2, -bh / 2, bw, bh);
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(oc, 0, 0, bw * k, bh * k, px, py, bw, bh);
     } else drawLines(ctx, m, L.align, false);
     ctx.restore();
   }
@@ -518,7 +525,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (e.key === 'Escape' || e.key === 'Enter') { deselect(); return true; }
     if (e.key === 'Delete' || e.key === 'Backspace') { removeSel(); e.preventDefault(); return true; }
     if (mod && e.key.toLowerCase() === 'd') { duplicate(); e.preventDefault(); return true; }
-    const step = e.shiftKey ? 0.02 : 0.004;
+    const step = e.shiftKey ? 0.01 : 0.001;   // flechitas: de a ~1 píxel de la imagen final (con Mayúscula, de a 10)
     if (mod && e.key.toLowerCase() === 'v' && S.lastCopied === 'layer' && layerClip) { pasteLayer(); e.preventDefault(); return true; }
     const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
     if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyLayer(L); e.preventDefault(); return true; }
