@@ -535,3 +535,18 @@ body.has-banner { --bh: 44px; }
 #backupList select { font: inherit; padding: 8px; border-radius: 8px; }
 #backupBtn.ok { color: #2e8b57; }
 #backupBtn.warn { color: var(--danger); border-color: var(--danger); }
+
+/* archivo */
+.arch-tile { cursor: default; }
+.arch-btns { display: flex; flex-direction: column; gap: 4px; }
+.arch-btns .chip { padding: 5px 6px; font-size: 12px; justify-content: center; }
+.chip.ic svg { display: none; }
+@media (max-width: 480px) {
+  .chip.ic { padding: 6px 8px; }
+  .chip.ic svg { display: block; }
+  .chip.ic .lbl { display: none; }
+  #gridPane .bar.bottom { gap: 4px; }
+  #gridPane .bar.bottom .chip, #gridPane .bar.bottom .btn { padding: 6px 9px; font-size: 13px; }
+  #gridPane .bar.bottom { flex-wrap: wrap; justify-content: flex-end; row-gap: 2px; padding-top: 6px; }
+  #count { font-size: 11px; flex-basis: 100%; }
+}

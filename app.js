@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.7.1';
+  const VERSION = 'v1.8';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -135,7 +135,7 @@
   };
 
   const cleanTexts = ts => (ts || []).map(({ _box, ...L }) => L);
-  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, parent: it.parent, slides: it.slides, sync: it.sync || null });
+  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, parent: it.parent, slides: it.slides, archived: it.archived, archivedPos: it.archivedPos, sync: it.sync || null });
   let Sync = null;   // sincronización con Google Drive (drive.js)
   let Backup = null;   // copia automática en una carpeta (más abajo)
   const saveTimers = new Map();
@@ -521,8 +521,8 @@
   // En la grilla van sólo las primeras diapositivas (y cualquier publicación que haya quedado suelta).
   function normalizeOrder() {
     const seen = new Set();
-    S.order = S.order.filter(id => { const it = S.items.get(id); if (!it || isChild(it) || seen.has(id)) return false; seen.add(id); return true; });
-    for (const it of S.items.values()) if (!isChild(it) && !seen.has(it.id)) { S.order.push(it.id); seen.add(it.id); }
+    S.order = S.order.filter(id => { const it = S.items.get(id); if (!it || isChild(it) || it.archived || seen.has(id)) return false; seen.add(id); return true; });
+    for (const it of S.items.values()) if (!isChild(it) && !it.archived && !seen.has(it.id)) { S.order.push(it.id); seen.add(it.id); }
   }
   // Deja el carrusel con estas diapositivas, en este orden, en el lugar que ocupaba oldLeadId.
   function setSlides(ids, oldLeadId) {
@@ -1399,9 +1399,11 @@
   function updateSelectBar() {
     const n = S.selected.size;
     $('#selectCount').textContent = n ? `${n} seleccionada${n > 1 ? 's' : ''}` : S.pasteMode === 'carousel' ? 'Tocá las publicaciones a sumar'
-      : S.pasteMode === 'export' ? (isNarrow() ? 'Tocá las que querés descargar' : 'Tocá o arrastrá sobre las que querés descargar (Mayúscula: un tramo)') : 'Tocá las fotos';
+      : S.pasteMode === 'export' ? (isNarrow() ? 'Tocá las publicaciones' : 'Tocá o arrastrá sobre las publicaciones (Mayúscula: un tramo)') : 'Tocá las fotos';
     $('#selectApply').disabled = !n;
     if (S.pasteMode === 'export') $('#selectApply').textContent = n ? `Descargar ${n}` : 'Descargar';
+    $('#selectArchive').hidden = S.pasteMode !== 'export';
+    $('#selectArchive').disabled = !n;
   }
   pasteManyBtn.addEventListener('click', () => startSelect('color'));
   $('#selectCancel').addEventListener('click', endSelect);
@@ -1538,6 +1540,7 @@
       const id = uid();
       const it = structuredClone({ ...meta({ ...m, id }), sync: null });
       delete it.parent; delete it.slides;
+      delete it.archived; delete it.archivedPos;
       const fetchF = fid => { if (!fid || !Sync) throw new Error('el archivo está en Drive y no hay conexión'); return Sync.fetchFile(fid); };
       if (kind !== 'blank') {
         let orig = e.blobs && e.blobs.orig, thumb = e.blobs && e.blobs.thumb;
@@ -1912,6 +1915,107 @@
   Backup.onChange(backupChip);
   Backup.init();
 
+  // ================= Archivo =================
+  // Una publicación archivada (con todas sus diapositivas) sale de la grilla pero queda guardada para siempre:
+  // en el dispositivo, en Drive y en la copia de la computadora, hasta que se desarchive o se elimine.
+  // al arrancar sólo se cargan las miniaturas de la grilla: las archivadas se cargan cuando hacen falta
+  async function ensureThumb(it) {
+    if (it.thumb) return true;
+    try {
+      if (it.kind === 'blank') it.thumb = solidImage(it.bg);
+      else { const b = await DB.get('blobs', it.id); if (b && (b.thumb || b.orig)) it.thumb = await loadImage(b.thumb || b.orig); }
+    } catch (e) { console.warn(e); }
+    if (it.thumb) drawThumb(it);
+    return !!it.thumb;
+  }
+  function archivePosts(leads, { undo = true } = {}) {
+    leads = [...new Set(leads.map(leaderOf))].filter(Boolean);
+    if (!leads.length) return;
+    const wasCur = S.current && leads.includes(leaderOf(S.current));
+    const idx0 = wasCur ? S.order.indexOf(leaderOf(S.current).id) : -1;
+    const now = Date.now();
+    for (const lead of leads) {
+      const pos = S.order.indexOf(lead.id);
+      for (const x of slidesOf(lead)) { x.archived = now; if (x === lead) x.archivedPos = Math.max(0, pos); saveItem(x); }
+    }
+    normalizeOrder(); saveOrder(); renderGrid();
+    if (wasCur) {
+      S.current = null; document.body.classList.remove('has-current');
+      const next = S.order[Math.min(idx0, S.order.length - 1)];
+      if (next && !isNarrow()) openEditor(next); else closeEditorMobile();
+    }
+    const n = leads.length;
+    toast(n === 1 ? 'Archivada: está en “Archivo”' : `${n} archivadas: están en “Archivo”`, false, 7000, undo ? { label: 'Deshacer', fn: () => unarchivePosts(leads) } : null);
+  }
+  function unarchivePosts(leads, { open = false } = {}) {
+    const order = [...leads].sort((a, b) => (a.archivedPos ?? 0) - (b.archivedPos ?? 0));
+    for (const lead of order) {
+      if (!S.items.has(lead.id)) continue;
+      const pos = lead.archivedPos ?? 0;
+      for (const x of slidesOf(lead)) { delete x.archived; delete x.archivedPos; saveItem(x); }
+      if (!S.order.includes(lead.id)) S.order.splice(clamp(pos, 0, S.order.length), 0, lead.id);
+    }
+    normalizeOrder(); saveOrder(); renderGrid();
+    order.forEach(ensureThumb);
+    if (open && order[0] && !isNarrow()) openEditor(order[0].id);
+    const n = order.length;
+    toast(n === 1 ? 'Volvió a la grilla' : `${n} volvieron a la grilla`);
+  }
+  const archived = () => [...S.items.values()].filter(it => it.archived && !isChild(it)).sort((a, b) => (b.archived || 0) - (a.archived || 0));
+  const archSheet = $('#archSheet'), archList = $('#archList');
+  function openArchive() {
+    archSheet.hidden = false;
+    const list = archived();
+    $('#archNote').textContent = list.length
+      ? `${list.length} archivada${list.length > 1 ? 's' : ''}. Quedan guardadas para siempre (también en Drive y en la copia) hasta que las vuelvas a la grilla o las elimines.`
+      : 'No hay publicaciones archivadas. Para archivar una, abrila y tocá “Archivar”, o elegí varias en la grilla (⌘ / Ctrl + clic).';
+    archList.replaceChildren(...list.map(lead => {
+      const n = slidesOf(lead).length;
+      const el = document.createElement('div'); el.className = 'tr-tile arch-tile';
+      const c = document.createElement('canvas'); c.width = 120; c.height = Math.round(120 / S.gridAspect);
+      const cap = document.createElement('span'); cap.className = 'tr-cap';
+      cap.textContent = `${lead.name || 'Publicación'}${n > 1 ? ` · ${n} diapositivas` : ''} · ${ago(lead.archived)}`;
+      const row = document.createElement('div'); row.className = 'arch-btns';
+      row.innerHTML = `<button class="chip" data-a="back">A la grilla</button><button class="chip danger" data-a="del">Eliminar</button>`;
+      el.append(c, cap, row);
+      (async () => {
+        try {
+          if (!await ensureThumb(lead)) return;
+          const tmp = { ...lead, canvas: canvas(1, 1), stripCanvas: null };
+          await T.fontsReady(tmp).catch(() => { });
+          drawThumb(tmp);
+          c.getContext('2d').drawImage(tmp.canvas, 0, 0, c.width, c.height);
+        } catch (e) { console.warn(e); }
+      })();
+      row.addEventListener('click', async e => {
+        const b = e.target.closest('[data-a]'); if (!b) return;
+        if (b.dataset.a === 'back') { unarchivePosts([lead], { open: true }); el.remove(); }
+        else {
+          if (!confirm(`¿Eliminar “${lead.name || 'esta publicación'}”${n > 1 ? ` y sus ${n} diapositivas` : ''}? (Queda en “Eliminadas” por 30 días.)`)) return;
+          for (const x of slidesOf(lead).reverse()) {
+            await toTrash(x, { index: lead.archivedPos ?? 0 });
+            S.items.delete(x.id);
+            await DB.remove(x.id).catch(reportError);
+            S.deleted.add(x.id);
+            if (Sync) Sync.trashItem(x);
+          }
+          saveOrder(); el.remove();
+          toast('Eliminada: está en “Eliminadas”');
+        }
+        if (!archList.children.length) openArchive();
+      });
+      return el;
+    }));
+  }
+  $('#archBtn').addEventListener('click', openArchive);
+  archSheet.addEventListener('click', e => { if (e.target === archSheet || e.target.closest('[data-close]')) archSheet.hidden = true; });
+  $('#archiveBtn').addEventListener('click', () => { if (S.current) archivePosts([S.current]); });
+  $('#selectArchive').addEventListener('click', () => {
+    const leads = S.order.filter(id => S.selected.has(id)).map(id => S.items.get(id));
+    endSelect();
+    archivePosts(leads);
+  });
+
   // ---- duplicar una publicación entera (si es carrusel, con todas sus diapositivas) ----
   let dupBusy = false;
   async function duplicatePost(src, after) {
@@ -1923,7 +2027,7 @@
       for (const x of list) {
         const id = uid();
         const it = structuredClone({ ...meta(x), id, sync: null });
-        delete it.parent; delete it.slides;
+        delete it.parent; delete it.slides; delete it.archived; delete it.archivedPos;
         it.texts = (it.texts || []).map(L => ({ ...L, id: uid() }));   // las imágenes de las capas se comparten (no se borran nunca)
         const kind = x.kind || 'image';
         if (kind !== 'blank') {
@@ -2246,6 +2350,12 @@
       const famBefore = JSON.stringify([it.parent, it.slides]);
       for (const k of ['parent', 'slides']) { if (m[k] == null) delete it[k]; else it[k] = m[k]; }
       if (JSON.stringify([it.parent, it.slides]) !== famBefore) { renderGridSoon(); if (S.current) { renderStrip(); updateTitle(); } }
+      const wasArch = !!it.archived;
+      for (const k of ['archived', 'archivedPos']) { if (m[k] == null) delete it[k]; else it[k] = m[k]; }
+      if (wasArch !== !!it.archived) {
+        if (!it.archived && !isChild(it) && !S.order.includes(it.id)) { S.order.splice(clamp(it.archivedPos ?? 0, 0, S.order.length), 0, it.id); ensureThumb(it); }
+        renderGridSoon(); if (!archSheet.hidden) openArchive();
+      }
       if (m.kind === 'blank') {
         it.bg = m.bg; it.thumb = solidImage(m.bg);
         if (S.full && S.full.id === it.id) S.full = { id: it.id, img: it.thumb, w: 40, h: 50 };

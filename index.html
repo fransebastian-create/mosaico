@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Inter:wght@400;700&family=Playfair+Display:ital@0;1&display=swap">
-<link rel="stylesheet" href="styles.css?v=1.7.1">
+<link rel="stylesheet" href="styles.css?v=1.8">
 </head>
 <body>
 <div id="syncBanner" class="sync-banner" hidden><span id="syncBannerText"></span><button id="syncBannerBtn" class="btn">Reconectar</button></div>
@@ -29,6 +29,7 @@
       <span id="selectCount">Tocá las fotos</span>
       <button id="selectAll" class="chip">Todas</button>
       <button id="selectCancel" class="chip">Cancelar</button>
+      <button id="selectArchive" class="chip" hidden>Archivar</button>
       <button id="selectApply" class="btn primary">Pegar</button>
     </div>
     <div id="grid" class="grid"></div>
@@ -39,6 +40,7 @@
     <footer class="bar bottom">
       <span id="count"></span>
       <button id="backupBtn" class="chip" hidden title="Copia automática en una carpeta de tu computadora">Copia</button>
+      <button id="archBtn" class="chip" title="Publicaciones archivadas">Archivo</button>
       <button id="trashBtn" class="chip" title="Publicaciones eliminadas: recuperarlas">Eliminadas</button>
       <button id="downloadAll" class="btn">Descargar…</button>
     </footer>
@@ -49,7 +51,8 @@
       <button id="backBtn" class="chip back">‹ Grilla</button>
       <span id="editorTitle"></span>
       <div class="bar-actions">
-        <button id="dupBtn" class="chip" title="Duplicar la publicación entera (Ctrl+D)">Duplicar</button>
+        <button id="dupBtn" class="chip ic" title="Duplicar la publicación entera (Ctrl+D)"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1.6"/><path d="M13 7V4.6A1.6 1.6 0 0 0 11.4 3H4.6A1.6 1.6 0 0 0 3 4.6v6.8A1.6 1.6 0 0 0 4.6 13H7"/></svg><span class="lbl">Duplicar</span></button>
+        <button id="archiveBtn" class="chip ic" title="Archivar: sale de la grilla y queda guardada en “Archivo”"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="4" rx="1"/><path d="M4 7.5v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-8M8 11h4"/></svg><span class="lbl">Archivar</span></button>
         <button id="deleteBtn" class="chip danger">Eliminar</button>
         <button id="downloadBtn" class="btn primary">Descargar</button>
       </div>
@@ -143,6 +146,14 @@
     <button class="chip">Cancelar</button>
   </div>
 </div>
+<div id="archSheet" class="sheet" hidden>
+  <div class="sheet-card trash-card">
+    <p><strong>Archivo</strong></p>
+    <p class="muted-s" id="archNote"></p>
+    <div id="archList" class="tr-list"></div>
+    <button class="chip" data-close>Cerrar</button>
+  </div>
+</div>
 <div id="dlSheet" class="sheet" hidden>
   <div class="sheet-card">
     <p><strong>Descargar</strong></p>
@@ -182,9 +193,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="config.js?v=1.7.1"></script>
-<script src="drive.js?v=1.7.1"></script>
-<script src="texto.js?v=1.7.1"></script>
-<script src="app.js?v=1.7.1"></script>
+<script src="config.js?v=1.8"></script>
+<script src="drive.js?v=1.8"></script>
+<script src="texto.js?v=1.8"></script>
+<script src="app.js?v=1.8"></script>
 </body>
 </html>
