@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.8';
+  const VERSION = 'v1.8.1';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -138,6 +138,7 @@
   const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, parent: it.parent, slides: it.slides, archived: it.archived, archivedPos: it.archivedPos, sync: it.sync || null });
   let Sync = null;   // sincronización con Google Drive (drive.js)
   let Backup = null;   // copia automática en una carpeta (más abajo)
+  let Hist = null;     // deshacer / rehacer de cada publicación (más abajo)
   const saveTimers = new Map();
   function saveItem(it) {
     it._gen = (it._gen || 0) + 1;
@@ -146,6 +147,7 @@
     saveTimers.set(it.id, setTimeout(() => DB.put('items', meta(it)).catch(reportError), 300));
     if (Sync) Sync.kick();
     if (Backup) Backup.kick();
+    if (Hist) Hist.note(it);
   }
   const persistItem = it => DB.put('items', meta(it)).catch(reportError);
   function persistOrder() {
@@ -936,6 +938,7 @@
     renderStrip();
     document.body.classList.add('has-current', 'editing');
     syncControls(); updateTitle(); fitFrame(); requestRender();
+    Hist.base(it);
     const isVid = it.kind === 'video';
     $('#frameRow').hidden = !isVid;
     if (isVid) {
@@ -1349,6 +1352,70 @@
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => beforeBtn.addEventListener(t, () => setBefore(false)));
   beforeBtn.addEventListener('contextmenu', e => e.preventDefault());
 
+  // ================= Deshacer / rehacer =================
+  // Cada publicación guarda sus últimos 100 pasos mientras la app está abierta: capas (textos e imágenes),
+  // ajustes de color, recorte y color de fondo. Un arrastre o un deslizador movido de corrido cuenta como un solo paso.
+  Hist = (() => {
+    const H = new Map(), MAX = 100, GAP = 700;
+    let seq = 0, applying = false;
+    const snap = it => JSON.stringify({ texts: cleanTexts(it.texts), adj: it.adj, crop: it.crop, bg: it.bg ?? null });
+    const get = it => { let h = H.get(it.id); if (!h) { h = { past: [], future: [], last: snap(it), t: 0 }; H.set(it.id, h); } return h; };
+    function base(it) { if (it) get(it); ui(); }
+    function rebase(it) { const h = H.get(it.id); if (h) { h.last = snap(it); h.t = 0; } }
+    function note(it) {
+      if (applying) return;
+      const h = H.get(it.id); if (!h) return;   // nunca se abrió en el editor: no hay desde dónde deshacer
+      const s = snap(it); if (s === h.last) return;
+      const now = Date.now();
+      if (now - h.t > GAP) { h.past.push({ s: h.last, seq: ++seq }); if (h.past.length > MAX) h.past.shift(); }
+      h.future = []; h.last = s; h.t = now;
+      if (it === S.current) ui();
+    }
+    function apply(it, s) {
+      const o = JSON.parse(s);
+      applying = true;
+      try {
+        it.texts = o.texts; it.adj = o.adj; it.crop = o.crop;
+        if (o.bg == null) delete it.bg; else it.bg = o.bg;
+        if (it.kind === 'blank') { it.thumb = solidImage(it.bg); if (S.full && S.full.id === it.id) S.full = { id: it.id, img: it.thumb, w: 40, h: 50 }; }
+        saveItem(it);
+      } finally { applying = false; }
+      T.refresh(); syncControls(); requestRender(); drawThumb(it); ui();
+    }
+    function undo() {
+      const it = S.current, h = it && H.get(it.id);
+      if (!h || !h.past.length) return false;
+      const e = h.past.pop();
+      h.future.push(snap(it)); h.last = e.s; h.t = 0;
+      apply(it, e.s);
+      return true;
+    }
+    function redo() {
+      const it = S.current, h = it && H.get(it.id);
+      if (!h || !h.future.length) return false;
+      const s = h.future.pop();
+      h.past.push({ s: snap(it), seq: ++seq }); h.last = s; h.t = 0;
+      apply(it, s);
+      return true;
+    }
+    function ui() {
+      const h = S.current && H.get(S.current.id);
+      $('#undoBtn').disabled = !(h && h.past.length) && !undoStack.length;
+      $('#redoBtn').disabled = !(h && h.future.length);
+    }
+    const topSeq = () => { const h = S.current && H.get(S.current.id); return h && h.past.length ? h.past[h.past.length - 1].seq : -1; };
+    return { base, rebase, note, undo, redo, ui, topSeq, tick: () => ++seq };
+  })();
+  // Ctrl+Z: lo último que se hizo, sea un cambio en la publicación abierta o una eliminación
+  function undoAny() {
+    const delSeq = delSeqs.length ? delSeqs[delSeqs.length - 1] : -1, editSeq = Hist.topSeq();
+    if (editSeq < 0 && delSeq < 0 && !undoStack.length) return false;
+    if (editSeq > delSeq) return Hist.undo();
+    undoDelete(); return true;
+  }
+  $('#undoBtn').addEventListener('click', () => { undoAny(); });
+  $('#redoBtn').addEventListener('click', () => { Hist.redo(); });
+
   // copiar / pegar
   // Ajustes de color (filtros): se copian y pegan aparte de las capas.
   function copyAdj() {
@@ -1487,7 +1554,7 @@
   // ---- papelera: lo eliminado se guarda 30 días en el dispositivo; lo que está en la papelera de Drive también se puede traer ----
   // Al recuperar, la publicación vuelve con un id nuevo (el viejo queda como eliminado en todos lados y no hace lío).
   const TRASH_DAYS = 30, TRASH_MAX = 60;
-  const undoStack = [];   // eliminadas en esta sesión (para Ctrl+Z / Deshacer)
+  const undoStack = [], delSeqs = [];   // eliminadas en esta sesión (para Ctrl+Z / Deshacer)
   async function trashEntries() {
     const db = await DB.open();
     return new Promise((res, rej) => {
@@ -1502,11 +1569,12 @@
       const [b, v] = await Promise.all([DB.get('blobs', it.id), DB.get('videos', it.id)]);
       const e = { id: it.id, at: Date.now(), meta: meta(it), blobs: b ? { orig: b.orig, thumb: b.thumb } : null, video: v ? v.video : null, media: it.sync && it.sync.media ? { ...it.sync.media } : null, jsonId: it.sync && it.sync.jsonId, where };
       await DB.put('meta', e, 'trash:' + it.id);
-      undoStack.push(it.id);
+      undoStack.push(it.id); delSeqs.push(Hist ? Hist.tick() : 0);
       Backup.kick(0);
     } catch (e) { console.warn('no se pudo guardar en Eliminadas', e); }
   }
   function afterDelete() {
+    Hist.ui();
     toast('Publicación eliminada', false, 7000, { label: 'Deshacer', fn: undoDelete });
   }
   async function pruneTrash() {
@@ -1519,7 +1587,7 @@
   setTimeout(pruneTrash, 8000);
   async function undoDelete() {
     while (undoStack.length) {
-      const id = undoStack.pop();
+      const id = undoStack.pop(); delSeqs.pop();
       const e = await DB.get('meta', 'trash:' + id).catch(() => null);
       if (e) return restoreEntry(e);
     }
@@ -2258,7 +2326,8 @@
     const tag = (e.target.tagName || '').toLowerCase();
     if ((tag === 'input' && e.target.type !== 'range') || tag === 'textarea' || tag === 'select') return;
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && undoStack.length) { undoDelete(); e.preventDefault(); }
+    if (mod && ((e.shiftKey && e.key.toLowerCase() === 'z') || (!e.metaKey && e.key.toLowerCase() === 'y'))) { Hist.redo(); e.preventDefault(); }
+    else if (mod && !e.shiftKey && e.key.toLowerCase() === 'z') { undoAny(); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyPost(); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'd') { duplicatePost(S.current); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'v' && S.lastCopied === 'post' && S.postClip) { pastePost(); e.preventDefault(); }
@@ -2366,6 +2435,7 @@
         if (S.full && S.full.id === it.id) S.full = null;
       }
       await saveLocalSafe(() => DB.put('items', meta(it)));
+      Hist.rebase(it);
       drawThumb(it);
       if (S.current === it) {
         T.refresh();

@@ -135,7 +135,7 @@ body.dropping .empty, body.dropping .grid { outline: 2px dashed var(--sel); outl
 #editorTitle { flex: 1; color: var(--muted); font-size: 13px; }
 
 .stage {
-  min-height: 0; min-width: 0; overflow: hidden;
+  position: relative; min-height: 0; min-width: 0; overflow: hidden;
   display: flex; align-items: center; justify-content: center; padding: 24px;
 }
 .frame {
@@ -550,3 +550,8 @@ body.has-banner { --bh: 44px; }
   #gridPane .bar.bottom { flex-wrap: wrap; justify-content: flex-end; row-gap: 2px; padding-top: 6px; }
   #count { font-size: 11px; flex-basis: 100%; }
 }
+
+/* deshacer / rehacer */
+.hist-btns { position: absolute; top: 10px; left: 10px; z-index: 3; display: flex; gap: 6px; }
+.hist-btns .chip { padding: 6px 9px; background: var(--panel); }
+.hist-btns .chip:disabled { opacity: .35; }
