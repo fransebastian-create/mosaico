@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.11';
+  const VERSION = 'v1.11.1';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -2500,6 +2500,37 @@
   const cloudBtn = $('#cloudBtn'), cloudLabel = $('#cloudLabel'), cloudSheet = $('#cloudSheet'), cloudBody = $('#cloudBody');
   let foundProjects = null, cloudBusy = '';
   const escHtml = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // ---- ¿hay una versión nueva publicada? ----
+  // En el iPhone (sobre todo abierta desde el ícono) la página no se recarga sola: retoma la que tenía en memoria.
+  // Al abrirla o volver a ella, se pregunta qué versión está publicada y, si es más nueva, se ofrece actualizar.
+  const verNum = v => String(v || '').replace(/^v/, '').split('.').map(n => +n || 0);
+  const newer = (a, b) => { const x = verNum(a), y = verNum(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+  let updChecked = 0;
+  async function checkUpdate(force = false) {
+    if (!force && Date.now() - updChecked < 60e3) return;
+    updChecked = Date.now();
+    try {
+      const r = await fetch(location.pathname + '?nv=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      const m = (await r.text()).match(/app\.js\?v=([\d.]+)/);
+      if (m && newer('v' + m[1], VERSION)) {
+        $('#updText').textContent = `Hay una versión nueva (v${m[1]})`;
+        $('#updPill').hidden = false;
+      }
+    } catch { }
+  }
+  $('#updBtn').addEventListener('click', async () => {
+    $('#updBtn').disabled = true;
+    try { await flushSaves(); } catch { }
+    const u = new URL(location.href); u.searchParams.set('u', Date.now().toString(36));   // dirección nueva: el iPhone no puede usar la copia vieja
+    location.replace(u.href);
+  });
+  { const u = new URL(location.href); if (u.searchParams.has('u')) { u.searchParams.delete('u'); history.replaceState(null, '', u.href); } }
+  setTimeout(() => checkUpdate(true), 4000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
+  window.addEventListener('pageshow', e => { if (e.persisted) checkUpdate(true); });
+  setInterval(() => { if (!document.hidden) checkUpdate(true); }, 30 * 60e3);
+
   // ---- aviso fijo: Drive dejó de recibir los cambios ----
   const isPending = it => { const st = Sync && Sync.state(), p = st && st.project; return !!p && (!it.sync || it.sync.project !== p.id || it.sync.dirty || it.sync.mediaDirty); };
   function renderSyncBanner(st) {
