@@ -564,3 +564,4 @@ body.has-banner { --bh: 44px; }
 .tp-group .tg-row > span { font-size: 12px; color: var(--muted); min-width: 100%; }
 .tp-group .chip { padding: 5px 9px; font-size: 12px; }
 .lp-actions .chip.act { background: var(--accent); color: var(--accent-ink); }
+.tp-group[hidden] { display: none; }

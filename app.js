@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.9';
+  const VERSION = 'v1.10';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -355,6 +355,15 @@
     function render(src, sw, sh, crop, adj, ow, oh, aspect = ASPECT, hq = false) {
       if (c2.width !== ow || c2.height !== oh) { c2.width = ow; c2.height = oh; }
       drawCropped(x2, src, sw, sh, crop, ow, oh, hq);
+      return applyAdj(adj, ow, oh);
+    }
+    // imagen entera con sus ajustes, respetando la transparencia (capas de imagen)
+    function filter(src, w, h, adj) {
+      if (c2.width !== w || c2.height !== h) { c2.width = w; c2.height = h; }
+      x2.clearRect(0, 0, w, h); x2.drawImage(src, 0, 0, w, h);
+      return applyAdj(adj, w, h);
+    }
+    function applyAdj(adj, ow, oh) {
       if (!adj || ADJ.every(a => !adj[a.key])) return c2;
       const u = k => (adj[k] || 0) / 100;
       const ex = Math.pow(2, u('exposure') * 1.5), con = 1 + u('contrast') * 0.5;
@@ -382,7 +391,7 @@
       x2.putImageData(im, 0, 0);
       return c2;
     }
-    return { render };
+    return { render, filter };
   };
 
   const R = (() => {
@@ -393,10 +402,11 @@
       void main(){ v = vec2(p.x*0.5+0.5, 0.5-p.y*0.5); gl_Position = vec4(p,0.0,1.0); }`;
     const fs = `precision highp float;
       varying vec2 v; uniform sampler2D t;
-      uniform float u_exposure,u_contrast,u_highlights,u_shadows,u_temp,u_tint,u_saturation,u_vibrance,u_fade;
+      uniform float u_exposure,u_contrast,u_highlights,u_shadows,u_temp,u_tint,u_saturation,u_vibrance,u_fade,u_keep;
       float luma(vec3 c){ return dot(c, vec3(0.2126,0.7152,0.0722)); }
       void main(){
-        vec3 c = texture2D(t, v).rgb;
+        vec4 t4 = texture2D(t, v);
+        vec3 c = t4.rgb;
         // balance de blancos y exposición en luz lineal
         vec3 l = pow(c, vec3(2.2));
         float y0 = luma(l);
@@ -416,7 +426,7 @@
         c = mix(vec3(y), c, 1.0 + u_vibrance * (1.0 - clamp(s, 0.0, 1.0)));
         // desvanecer (negros lavados)
         c = c * (1.0 - 0.15*u_fade) + 0.15*u_fade;
-        gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+        gl_FragColor = vec4(clamp(c, 0.0, 1.0), mix(1.0, t4.a, u_keep));   // u_keep: respetar la transparencia (capas)
       }`;
     const sh = (type, src) => {
       const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
@@ -438,6 +448,7 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     const U = {};
     for (const a of ADJ) U[a.key] = gl.getUniformLocation(prog, 'u_' + a.key);
+    const uKeep = gl.getUniformLocation(prog, 'u_keep');
 
     const c2 = canvas(1, 1), x2 = c2.getContext('2d');
     // 1) recorta y escala con calidad alta en 2D, 2) aplica el color en la GPU
@@ -450,10 +461,23 @@
       gl.viewport(0, 0, ow, oh);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, c2);
       for (const a of ADJ) gl.uniform1f(U[a.key], (adj ? adj[a.key] : 0) / 100);
+      gl.uniform1f(uKeep, 0);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       return glc;
     }
-    return { render };
+    // Imagen entera con sus ajustes de color, respetando la transparencia (capas de imagen).
+    function filter(src, w, h, adj) {
+      if (c2.width !== w || c2.height !== h) { c2.width = w; c2.height = h; }
+      x2.setTransform(1, 0, 0, 1, 0, 0); x2.clearRect(0, 0, w, h); x2.drawImage(src, 0, 0, w, h);
+      if (glc.width !== w || glc.height !== h) { glc.width = w; glc.height = h; }
+      gl.viewport(0, 0, w, h);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c2);
+      for (const a of ADJ) gl.uniform1f(U[a.key], (adj ? adj[a.key] || 0 : 0) / 100);
+      gl.uniform1f(uKeep, 1);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      return glc;
+    }
+    return { render, filter };
   })();
 
   // ================= Elementos =================
@@ -469,7 +493,15 @@
     redrawAll: () => { for (const it of S.items.values()) drawThumb(it); requestRender(); },
     kickSync: () => Sync && Sync.kick(), trashFile: id => Sync && Sync.trashFile(id),
     startSelect: mode => startSelect(mode),
-    loadImage: b => loadImage(b), prepLayerImage: f => prepLayerImage(f),
+    loadImage: b => loadImage(b), prepLayerImage: f => prepLayerImage(f), ADJ,
+    // copia propia de la imagen de una capa con sus ajustes de color (o null si no hay motor de color)
+    filterImage(img, w, h, adj) {
+      if (!R.filter) return null;
+      const k = Math.min(1, 1600 / Math.max(w, h)), cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
+      const out = R.filter(img, cw, ch, adj), c = canvas(cw, ch);
+      c.getContext('2d').drawImage(out, 0, 0);
+      return c;
+    },
     fetchFile: id => (Sync ? Sync.fetchFile(id) : Promise.reject(new Error('la imagen está en la nube y no hay conexión'))),
   });
   // Imagen para una capa: se achica a 2160 px como mucho y conserva la transparencia (PNG).
@@ -2750,5 +2782,5 @@
   init().catch(reportError);
 
   // para pruebas
-  window.__mosaico = { importFiles, exportItem, loadHeicLib, clampCrop, S, T, appApi, get Sync() { return Sync; } };
+  window.__mosaico = { importFiles, exportItem, loadHeicLib, clampCrop, S, T, R, appApi, get Sync() { return Sync; } };
 })();

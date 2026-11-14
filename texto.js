@@ -255,6 +255,26 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   // Recorte: qué fracción de la imagen se saca de cada lado (0 = nada).
   const cropOf = L => ({ l: L.cl || 0, r: L.cr || 0, t: L.ct || 0, b: L.cb || 0 });
+  // Ajustes de color y teñido de una capa de imagen: se calculan una vez y se guardan hasta que cambien.
+  const fxCache = new Map();
+  const hasAdj = L => !!(L.adj && Object.values(L.adj).some(v => v));
+  function layerFx(L, e) {
+    const tint = L.tintc && L.tintc.on ? L.tintc : null;
+    if (!hasAdj(L) && !tint) { fxCache.delete(L.id); return null; }
+    const key = L.img + '|' + JSON.stringify([L.adj || null, tint]);
+    const c0 = fxCache.get(L.id);
+    if (c0 && c0.key === key) return c0.c;
+    let c = hasAdj(L) ? A.filterImage(e.img, e.w, e.h, L.adj) : null;
+    if (!c) { c = document.createElement('canvas'); c.width = e.w; c.height = e.h; c.getContext('2d').drawImage(e.img, 0, 0); }
+    if (tint) {   // el color va sólo donde hay imagen (respeta la transparencia)
+      const x = c.getContext('2d');
+      x.globalCompositeOperation = 'source-atop'; x.globalAlpha = clamp(tint.amount ?? 1, 0, 1);
+      x.fillStyle = tint.color || '#ffffff'; x.fillRect(0, 0, c.width, c.height);
+      x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1;
+    }
+    fxCache.set(L.id, { key, c });
+    return c;
+  }
   function drawImageLayer(ctx, L, x0, H) {
     const W = H * ASPECT, e = imageOf(L);
     const ar = L.ar || (e.w ? e.w / e.h : 1), c = cropOf(L);
@@ -268,8 +288,9 @@ window.createMosaicoText = function createMosaicoText(A) {
     ctx.globalCompositeOperation = BLENDS[L.blend] ? L.blend : 'source-over';
     setShadow(ctx, L, h * 0.35);
     ctx.imageSmoothingQuality = 'high';
-    if (c.l || c.r || c.t || c.b) ctx.drawImage(e.img, c.l * e.w, c.t * e.h, (1 - c.l - c.r) * e.w, (1 - c.t - c.b) * e.h, -w / 2, -h / 2, w, h);
-    else ctx.drawImage(e.img, -w / 2, -h / 2, w, h);
+    const src = layerFx(L, e) || e.img, sw = src === e.img ? e.w : src.width, shh = src === e.img ? e.h : src.height;
+    if (c.l || c.r || c.t || c.b) ctx.drawImage(src, c.l * sw, c.t * shh, (1 - c.l - c.r) * sw, (1 - c.t - c.b) * shh, -w / 2, -h / 2, w, h);
+    else ctx.drawImage(src, -w / 2, -h / 2, w, h);
     ctx.restore();
   }
   async function addImageFiles(files, it = S.current) {
@@ -325,6 +346,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     shadow: { on: true, color: '#000000', opacity: 0.35, blur: 0.4, dist: 0.25, angle: 90 },
     stroke: { on: false, color: '#000000', width: 0.3 },
     bg: { on: false, color: '#000000', opacity: 0.55, pad: 0.5, radius: 0.3 },
+    tintc: { on: false, color: '#ffffff', amount: 1 },   // teñir (capas de imagen)
   };
   const clone = o => JSON.parse(JSON.stringify(o));
   let sel = null;            // id del texto seleccionado (el que se edita en el panel)
@@ -663,6 +685,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     <div id="tSizeRot"></div>
     <div class="tp-field"><span>Color</span><div class="swatches" id="tColors"></div></div>
     <div id="tLook"></div>
+    <div class="tp-sec img-only" id="tImgAdj"></div>
+    <div class="tp-sec img-only" id="tTint"></div>
     <div class="tp-sec" id="tShadow"></div>
     <div class="tp-sec" id="tStroke"></div>
     <div class="tp-sec" id="tBg"></div>
@@ -888,6 +912,37 @@ window.createMosaicoText = function createMosaicoText(A) {
     },
   });
   function wrap(gs, k) { return { get: L => Math.round(gs.get(L) * k), set: (L, v) => gs.set(L, v / k) }; }
+  // Color de la imagen: los mismos ajustes que la foto de fondo, pero sólo para esta capa
+  {
+    const el = $('#tImgAdj');
+    el.innerHTML = `<button class="chip tp-toggle">Color de la imagen</button><div class="tp-body" hidden></div>`;
+    const btn = el.querySelector('.tp-toggle'), body = el.querySelector('.tp-body');
+    let open = false;
+    btn.addEventListener('click', () => { open = !open; body.hidden = !open; });
+    refreshers.push(L => { btn.classList.toggle('on', hasAdj(L)); });
+    const setAdj = k => (L, v) => {
+      L.adj = { ...(L.adj || {}), [k]: v };
+      if (!v) delete L.adj[k];
+      if (!Object.keys(L.adj).length) delete L.adj;
+    };
+    for (const a of A.ADJ) slider(body, { label: a.label, min: a.min ?? -100, max: 100, get: L => (L.adj && L.adj[a.key]) || 0, set: setAdj(a.key), fmt: v => (v > 0 ? '+' : '') + v, cls: 'img-only' });
+    const row = document.createElement('div'); row.className = 'row';
+    row.innerHTML = `<button class="chip" data-x="bw">Blanco y negro</button><button class="chip" data-x="reset">Restablecer color</button>`;
+    row.addEventListener('click', e => {
+      const b = e.target.closest('[data-x]'), L = cur(); if (!b || !L) return;
+      if (b.dataset.x === 'bw') setAdj('saturation')(L, (L.adj && L.adj.saturation === -100) ? 0 : -100);
+      else delete L.adj;
+      changed(); syncPanel();
+    });
+    body.append(row);
+  }
+  section($('#tTint'), {
+    label: 'Teñir de un color', key: 'tintc', build: b => {
+      const s = sub.bind(null, 'tintc');
+      colorInput(b, { label: 'Color', ...s('color', '#ffffff') });
+      slider(b, { label: 'Intensidad', min: 0, max: 100, ...wrap(s('amount', 1), 100), fmt: pct });
+    },
+  });
 
   // textos
   const ta = $('#tText');
