@@ -555,3 +555,12 @@ body.has-banner { --bh: 44px; }
 .hist-btns { position: absolute; top: 10px; left: 10px; z-index: 3; display: flex; gap: 6px; }
 .hist-btns .chip { padding: 6px 9px; background: var(--panel); }
 .hist-btns .chip:disabled { opacity: .35; }
+
+/* varias capas elegidas */
+.tbox.extra { border-color: rgba(120,180,255,.95); }
+.tbox.multi .thandle { display: none; }
+.tp-group { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 6px 0 10px; display: flex; flex-direction: column; gap: 6px; }
+.tp-group .tg-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.tp-group .tg-row > span { font-size: 12px; color: var(--muted); min-width: 100%; }
+.tp-group .chip { padding: 5px 9px; font-size: 12px; }
+.lp-actions .chip.act { background: var(--accent); color: var(--accent-ink); }

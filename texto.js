@@ -327,7 +327,9 @@ window.createMosaicoText = function createMosaicoText(A) {
     bg: { on: false, color: '#000000', opacity: 0.55, pad: 0.5, radius: 0.3 },
   };
   const clone = o => JSON.parse(JSON.stringify(o));
-  let sel = null;            // id del texto seleccionado
+  let sel = null;            // id del texto seleccionado (el que se edita en el panel)
+  const multi = new Set();   // varias capas elegidas a la vez (se mueven y se alinean juntas)
+  let pickMany = false;      // modo "Elegir varias" (para el celular, sin teclado)
   let lastFont = (() => { try { return localStorage.getItem('mosaico.lastFont') || 'inter'; } catch { return 'inter'; } })();
   const cur = () => S.current && sel ? (S.current.texts || []).find(L => L.id === sel) || null : null;
   function changed() { if (!S.current) return; A.saveItem(S.current); A.requestRender(); renderLayersSoon(); }
@@ -343,24 +345,72 @@ window.createMosaicoText = function createMosaicoText(A) {
     changed();
     setTimeout(() => { const ta = $('#tText'); ta.focus(); ta.select(); }, 30);
   }
-  function select(id) {
+  const isMulti = () => multi.size >= 2;
+  const group = () => { const ts = (S.current && S.current.texts) || []; return isMulti() ? ts.filter(L => multi.has(L.id)) : (cur() ? [cur()] : []); };
+  function select(id) { multi.clear(); setSel(id); }
+  // sumar o sacar una capa del grupo elegido
+  function toggleMulti(id) {
+    if (!multi.size && sel) multi.add(sel);
+    if (multi.has(id)) multi.delete(id); else multi.add(id);
+    if (multi.size <= 1) { const only = [...multi][0] || null; multi.clear(); setSel(only); return; }
+    setSel(multi.has(id) ? id : [...multi].pop());
+  }
+  function setSel(id) {
     sel = id;
+    if (!id) { multi.clear(); pickMany = false; }
     document.body.classList.toggle('text-mode', !!id);
     panel.classList.toggle('img-mode', isImg(cur()));
-    syncPanel(); A.requestRender(); renderLayers();
+    syncPanel(); A.requestRender(); renderLayers(); renderGroupBar();
     if (!id) hideBox();
   }
   function deselect() { if (sel) { const ta = $('#tText'); if (document.activeElement === ta) ta.blur(); select(null); } }
   function removeSel() {
-    const it = S.current, L = cur(); if (!L) return;
-    it.texts = it.texts.filter(o => o !== L);
+    const it = S.current, ls = group(); if (!ls.length) return;
+    it.texts = it.texts.filter(o => !ls.includes(o));
     select(null); changed();
   }
   function duplicate() {
-    const it = S.current, L = cur(); if (!L) return;
-    const D = { ...clone(L), id: uid(), x: clamp(L.x + 0.04, 0, 1), y: clamp(L.y + 0.04, 0, 1) };
-    delete D._box;
-    it.texts.push(D); select(D.id); changed();
+    const it = S.current, ls = group(); if (!ls.length) return;
+    const ds = ls.map(L => { const D = { ...clone(L), id: uid(), x: clamp(L.x + 0.04, 0, 1), y: clamp(L.y + 0.04, 0, 1) }; delete D._box; return D; });
+    it.texts.push(...ds);
+    if (ds.length === 1) select(ds[0].id);
+    else { multi.clear(); ds.forEach(D => multi.add(D.id)); setSel(ds[ds.length - 1].id); }
+    changed();
+  }
+  // Lo que ocupa cada capa en la publicación (x en fracción del ancho, y del alto), contando el giro.
+  function extent(L) {
+    const b = L._box || { w: 0, h: 0 }, a = rad(L.rot || 0), c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+    const hw = (b.w * c + b.h * s) / 2 / ASPECT, hh = (b.w * s + b.h * c) / 2;
+    return { l: L.x - hw, r: L.x + hw, t: L.y - hh, b: L.y + hh };
+  }
+  const bboxOf = es => ({ l: Math.min(...es.map(e => e.l)), r: Math.max(...es.map(e => e.r)), t: Math.min(...es.map(e => e.t)), b: Math.max(...es.map(e => e.b)) });
+  // Alinear / repartir / centrar el grupo
+  function alignGroup(mode) {
+    const ls = group().filter(L => !L.locked);
+    if (!ls.length) return;
+    const es = ls.map(extent), bb = bboxOf(es);
+    const cx = (bb.l + bb.r) / 2, cy = (bb.t + bb.b) / 2;
+    if (mode === 'dh' || mode === 'dv') {   // repartir: el mismo espacio entre una y otra
+      if (ls.length < 3) { toast('Para repartir hacen falta 3 capas o más'); return; }
+      const H = mode === 'dh', idx = ls.map((L, i) => i).sort((i, j) => H ? es[i].l - es[j].l : es[i].t - es[j].t);
+      const size = i => H ? es[i].r - es[i].l : es[i].b - es[i].t;
+      const gap = ((H ? bb.r - bb.l : bb.b - bb.t) - idx.reduce((a, i) => a + size(i), 0)) / (idx.length - 1);
+      let pos = H ? bb.l : bb.t;
+      for (const i of idx) { const d = pos - (H ? es[i].l : es[i].t); if (H) ls[i].x += d; else ls[i].y += d; pos += size(i) + gap; }
+    } else {
+      ls.forEach((L, i) => {
+        const e = es[i];
+        if (mode === 'l') L.x += bb.l - e.l;
+        else if (mode === 'r') L.x += bb.r - e.r;
+        else if (mode === 'ch') L.x += cx - (e.l + e.r) / 2;
+        else if (mode === 't') L.y += bb.t - e.t;
+        else if (mode === 'b') L.y += bb.b - e.b;
+        else if (mode === 'cv') L.y += cy - (e.t + e.b) / 2;
+        else if (mode === 'pageh') L.x += 0.5 - cx;
+        else if (mode === 'pagev') L.y += 0.5 - cy;
+      });
+    }
+    changed();
   }
   // ---- recuadro de selección y guías ----
   const layer = document.createElement('div'); layer.className = 'tlayer';
@@ -368,18 +418,26 @@ window.createMosaicoText = function createMosaicoText(A) {
   frame.append(layer);
   const box = layer.querySelector('.tbox'), handle = layer.querySelector('.thandle');
   const snapV = layer.querySelector('.tsnap.v'), snapH = layer.querySelector('.tsnap.h');
-  function hideBox() { box.hidden = true; snapV.classList.remove('on'); snapH.classList.remove('on'); }
+  function hideBox() { box.hidden = true; extraBoxes.forEach(b => { b.hidden = true; }); snapV.classList.remove('on'); snapH.classList.remove('on'); }
+  const extraBoxes = [];
+  function placeBox(el, L) {
+    const Hc = frame.clientHeight, Wc = Hc * ASPECT, pad = 6;
+    el.hidden = false;
+    el.style.left = L.x * Wc + 'px';
+    el.style.top = L.y * Hc + 'px';
+    el.style.width = L._box.w * Hc + pad * 2 + 'px';
+    el.style.height = L._box.h * Hc + pad * 2 + 'px';
+    el.style.transform = `translate(-50%, -50%) rotate(${L.rot || 0}deg)`;
+    el.classList.toggle('locked', !!L.locked); el.classList.toggle('off', !!L.hidden);
+  }
   function afterPreview() {
     const L = cur();
+    const others = isMulti() ? group().filter(x => x !== L && x._box) : [];
+    while (extraBoxes.length < others.length) { const b = document.createElement('div'); b.className = 'tbox extra'; layer.append(b); extraBoxes.push(b); }
+    extraBoxes.forEach((b, i) => { if (others[i]) placeBox(b, others[i]); else b.hidden = true; });
     if (!L || !L._box) { box.hidden = true; return; }
-    const Hc = frame.clientHeight, Wc = Hc * ASPECT, pad = 6;
-    box.hidden = false;
-    box.style.left = L.x * Wc + 'px';
-    box.style.top = L.y * Hc + 'px';
-    box.style.width = L._box.w * Hc + pad * 2 + 'px';
-    box.style.height = L._box.h * Hc + pad * 2 + 'px';
-    box.style.transform = `translate(-50%, -50%) rotate(${L.rot || 0}deg)`;
-    box.classList.toggle('locked', !!L.locked); box.classList.toggle('off', !!L.hidden);
+    placeBox(box, L);
+    box.classList.toggle('multi', isMulti());
   }
 
   // ---- gestos ----
@@ -420,10 +478,19 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (appBusy) return false;
     const rect = frame.getBoundingClientRect();
     const L = hitTest(e.clientX - rect.left, e.clientY - rect.top, rect);
-    if (!L) { tapCandidate = sel ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null; return false; }
-    if (sel !== L.id) select(L.id);
+    if (!L) { tapCandidate = sel && !pickMany ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null; return false; }
+    if (e.shiftKey || e.metaKey || e.ctrlKey || pickMany) {   // sumar / sacar del grupo
+      toggleMulti(L.id);
+      if (!(multi.has(L.id) || sel === L.id)) return true;   // la sacó: no se arrastra
+    } else if (isMulti() && multi.has(L.id)) setSel(L.id);   // tocar una del grupo: se mueve todo el grupo
+    else if (sel !== L.id) select(L.id);
     try { frame.setPointerCapture(e.pointerId); } catch { }
     g = { L, ptrs: new Map([[e.pointerId, { x: e.clientX, y: e.clientY }]]), raw: { x: L.x, y: L.y }, moved: 0, twist: null };
+    if (isMulti()) {
+      const ls = group().filter(x => !x.locked);
+      g.grp = ls.map(x => ({ L: x, x: x.x, y: x.y }));
+      g.bb0 = bboxOf(ls.map(extent)); g.dx = 0; g.dy = 0;
+    }
     frame.classList.add('dragging');
     return true;
   }
@@ -436,6 +503,16 @@ window.createMosaicoText = function createMosaicoText(A) {
     const after = gp(g.ptrs);
     const L = g.L;
     g.moved += Math.hypot(after.x - before.x, after.y - before.y);
+    if (g.grp) {   // grupo: todas se mueven lo mismo; el centro del grupo se engancha al centro de la publicación
+      g.dx += (after.x - before.x) / rect.width; g.dy += (after.y - before.y) / rect.height;
+      const cx = (g.bb0.l + g.bb0.r) / 2 + g.dx, cy = (g.bb0.t + g.bb0.b) / 2 + g.dy;
+      const sx = Math.abs(cx - 0.5) < SNAP, sy = Math.abs(cy - 0.5) < SNAP;
+      const dx = sx ? 0.5 - (g.bb0.l + g.bb0.r) / 2 : g.dx, dy = sy ? 0.5 - (g.bb0.t + g.bb0.b) / 2 : g.dy;
+      for (const m of g.grp) { m.L.x = clamp(m.x + dx, 0, 1); m.L.y = clamp(m.y + dy, 0, 1); }
+      snapV.classList.toggle('on', sx); snapH.classList.toggle('on', sy);
+      changed(); syncPanelValues();
+      return true;
+    }
     g.raw.x += (after.x - before.x) / rect.width;
     g.raw.y += (after.y - before.y) / rect.height;
     placeWithSnap(L, g.raw.x, g.raw.y);
@@ -472,7 +549,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   // agarrar la esquina: agrandar y girar con un dedo
   let hg = null;
   handle.addEventListener('pointerdown', e => {
-    const L = cur(); if (!L) return;
+    const L = cur(); if (!L || isMulti()) return;
     e.stopPropagation(); e.preventDefault();
     try { handle.setPointerCapture(e.pointerId); } catch { }
     const rect = frame.getBoundingClientRect();
@@ -494,7 +571,7 @@ window.createMosaicoText = function createMosaicoText(A) {
 
   // rueda / trackpad: si hay un texto elegido, agranda el texto en vez de la foto
   function wheel(e) {
-    const L = cur(); if (!L || L.locked) return false;
+    const L = cur(); if (!L || L.locked || isMulti()) return false;
     e.preventDefault();
     L.size = clamp(L.size * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), 0.012, maxSize(L));
     changed(); syncPanelValues();
@@ -502,7 +579,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   let mg = null;
   function macGesture(type, e) {
-    const L = cur(); if ((!L || L.locked) && !mg) return false;
+    const L = cur(); if ((!L || L.locked || isMulti()) && !mg) return false;
     e.preventDefault();
     if (type === 'start') mg = { scale: 1, rotation: 0, L, tw: { acc: 0, on: false, start: L.rot || 0 } };
     else if (type === 'change' && mg) {
@@ -535,7 +612,11 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (mod && e.key.toLowerCase() === 'v' && S.lastCopied === 'layer' && layerClip) { pasteLayer(); e.preventDefault(); return true; }
     const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
     if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyLayer(L); e.preventDefault(); return true; }
-    if (mv && !mod && !L.locked) { L.x = clamp(L.x + mv[0] / ASPECT, 0, 1); L.y = clamp(L.y + mv[1], 0, 1); changed(); e.preventDefault(); return true; }
+    if (mv && !mod) {
+      const ls = group().filter(x => !x.locked); if (!ls.length) return false;
+      for (const x of ls) { x.x = clamp(x.x + mv[0] / ASPECT, 0, 1); x.y = clamp(x.y + mv[1], 0, 1); }
+      changed(); e.preventDefault(); return true;
+    }
     return false;
   }
 
@@ -553,6 +634,16 @@ window.createMosaicoText = function createMosaicoText(A) {
       <button class="chip" data-t="dup">Duplicar</button>
       <button class="chip" data-t="copy" title="Copiar esta capa para pegarla en otra publicación">Copiar capa</button>
       <button class="chip danger" data-t="del">Borrar</button>
+    </div>
+    <div class="tp-group" id="tGroup" hidden>
+      <p class="muted-s" id="tGroupTxt"></p>
+      <div class="tg-row"><span>Alinear</span>
+        <button class="chip" data-g="l" title="Bordes izquierdos">Izq.</button><button class="chip" data-g="ch" title="Centros, en vertical">Centro</button><button class="chip" data-g="r" title="Bordes derechos">Der.</button>
+        <button class="chip" data-g="t" title="Bordes de arriba">Arriba</button><button class="chip" data-g="cv" title="Centros, en horizontal">Medio</button><button class="chip" data-g="b" title="Bordes de abajo">Abajo</button></div>
+      <div class="tg-row"><span>Repartir</span>
+        <button class="chip" data-g="dv" title="Mismo espacio entre una y otra, de arriba a abajo">↕ Parejo</button><button class="chip" data-g="dh" title="Mismo espacio entre una y otra, de izquierda a derecha">↔ Parejo</button></div>
+      <div class="tg-row"><span>Centrar el grupo</span>
+        <button class="chip" data-g="pageh" title="En el centro de la publicación, a lo ancho">↔ En la publicación</button><button class="chip" data-g="pagev" title="En el centro de la publicación, a lo alto">↕ En la publicación</button></div>
     </div>
     <textarea id="tText" rows="2" placeholder="Escribí acá" autocapitalize="sentences" spellcheck="true"></textarea>
     <div class="tp-field"><span>Tipografía</span>
@@ -895,6 +986,15 @@ window.createMosaicoText = function createMosaicoText(A) {
     lib.styles.push({ id: uid(), name, props });
     libChanged(); toast(`Estilo "${name}" guardado`);
   });
+  function renderGroupBar() {
+    const gb = $('#tGroup'); if (!gb) return;
+    gb.hidden = !isMulti();
+    if (isMulti()) {
+      const L = cur(), n = multi.size;
+      $('#tGroupTxt').innerHTML = `<b>${n} capas juntas</b>: se mueven juntas (arrastrando o con las flechitas). Lo de abajo cambia sólo “${escHtml(L ? layerName(L) : '')}”.`;
+    }
+  }
+  $('#tGroup').addEventListener('click', e => { const b = e.target.closest('[data-g]'); if (b) alignGroup(b.dataset.g); });
   // botones de arriba
   panel.querySelector('.tp-head').addEventListener('click', e => {
     const b = e.target.closest('[data-t]'); if (!b) return;
@@ -953,7 +1053,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!it) { lp.innerHTML = ''; return; }
     const ts = it.texts || [];
     const rows = ts.slice().reverse().map(L => `
-      <div class="lp-row${L.id === sel ? ' on' : ''}${L.hidden ? ' hid' : ''}" data-id="${L.id}">
+      <div class="lp-row${L.id === sel || multi.has(L.id) ? ' on' : ''}${L.hidden ? ' hid' : ''}" data-id="${L.id}">
         <span class="lp-grip" title="Arrastrá para cambiar el orden">${IC.grip}</span>
         <button class="lp-ic" data-l="eye" title="${L.hidden ? 'Mostrar' : 'Ocultar'}">${L.hidden ? IC.eyeOff : IC.eye}</button>
         <button class="lp-name" data-l="sel" title="Tocá para elegirla · doble toque para renombrar"><span class="lp-type">${isImg(L) ? IC.img : 'T'}</span>${escHtml(layerName(L))}</button>
@@ -966,6 +1066,7 @@ window.createMosaicoText = function createMosaicoText(A) {
         <div class="lp-actions">
           <button class="chip accent" data-l="addtext" id="addTextBtn" title="Agregar un texto">+ Texto</button>
           <button class="chip accent" data-l="addimg" id="addImgBtn" title="Agregar una imagen (PNG, logo, firma…) como capa">+ Imagen</button>
+          ${ts.length > 1 ? `<button class="chip${pickMany ? ' act' : ''}" data-l="many" title="Elegir varias capas para moverlas o alinearlas juntas (en la computadora: Mayúscula o ⌘ + clic)">${pickMany ? 'Listo' : 'Elegir varias'}</button>` : ''}
           ${layerClip ? `<button class="chip" data-l="paste" title="Pegar la capa copiada">Pegar capa</button><button class="chip" data-l="pastemany" title="Pegar la capa copiada en varias publicaciones">Pegar en…</button>` : ''}
         </div></div>
       <div class="lp-list">${rows}</div>
@@ -996,12 +1097,19 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (act === 'paste') return pasteLayer();
     if (act === 'pastemany') return A.startSelect('layer');
     if (act === 'bg') return deselect();
+    if (act === 'many') {
+      pickMany = !pickMany;
+      if (pickMany) toast('Tocá las capas (en la lista o sobre la publicación) para sumarlas o sacarlas');
+      renderLayers(); renderGroupBar(); return;
+    }
     if (!L) return;
+    if (act === 'sel' && (e.shiftKey || e.metaKey || e.ctrlKey || pickMany)) { toggleMulti(L.id); return; }
     if (act === 'sel') {
       const now = Date.now();
       if (lastNameTap.id === L.id && now - lastNameTap.t < 380) { lastNameTap = { id: null, t: 0 }; return renameLayer(L); }
       lastNameTap = { id: L.id, t: now };
-      if (sel !== L.id) select(L.id);
+      if (isMulti() && multi.has(L.id)) setSel(L.id);
+      else if (sel !== L.id) select(L.id);
       return;
     }
     if (act === 'eye') { L.hidden = !L.hidden; changed(); renderLayers(); return; }
