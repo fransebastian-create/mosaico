@@ -580,12 +580,21 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     return download(it.sync.media[role]);
   }
   // Papelera: publicaciones eliminadas (en cualquier dispositivo) que siguen en la papelera de Drive.
-  async function listTrashed() {
-    if (!st.project || !hasToken()) return [];
-    const q = `'${esc(st.project.datosId)}' in parents and trashed=true and appProperties has { key='mosaicoRole' and value='item' }`;
-    const fs = await listAll(q, 'id,name,modifiedTime,trashedTime,appProperties');
-    return fs.filter(f => !(f.appProperties && f.appProperties.mosaicoRecovered))
-      .map(f => ({ jsonId: f.id, id: f.appProperties.mosaicoId, at: Date.parse(f.trashedTime || f.modifiedTime) || 0 }));
+  // También las que figuran como eliminadas pero no llegaron a la papelera (sesión vencida, o archivos de otra persona).
+  async function listTrashed(deletedIds = []) {
+    if (!st.project) return [];
+    if (!hasToken()) { const e = new Error('hay que reconectar Google'); e.needsSignIn = true; throw e; }
+    const base = `'${esc(st.project.datosId)}' in parents and appProperties has { key='mosaicoRole' and value='item' }`;
+    const F = 'id,name,modifiedTime,trashedTime,appProperties';
+    const del = new Set(deletedIds);
+    const [tr, live] = await Promise.all([listAll(base + ' and trashed=true', F), del.size ? listAll(base + ' and trashed=false', F) : []]);
+    const out = new Map();
+    for (const f of [...tr, ...live.filter(f => del.has(f.appProperties && f.appProperties.mosaicoId))]) {
+      const a = f.appProperties || {};
+      if (a.mosaicoRecovered || !a.mosaicoId || out.has(a.mosaicoId)) continue;
+      out.set(a.mosaicoId, { jsonId: f.id, id: a.mosaicoId, at: Date.parse(f.trashedTime || f.modifiedTime) || 0 });
+    }
+    return [...out.values()];
   }
   const markRecovered = jsonId => api('PATCH', '/files/' + jsonId, { query: { supportsAllDrives: true }, body: { appProperties: { mosaicoRecovered: '1' } } }).catch(e => console.warn('no se pudo marcar', e));
   async function trashItem(it) {

@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.6.5';
+  const VERSION = 'v1.6.6';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1578,9 +1578,12 @@
     let cloudMsg = '';
     if (Sync && Sync.state().project) {
       try {
-        const rem = (await Sync.listTrashed()).filter(r => !known.has(r.id) && !done.has(r.id) && !S.items.has(r.id));
+        const rem = (await Sync.listTrashed([...S.deleted])).filter(r => !known.has(r.id) && !done.has(r.id) && !S.items.has(r.id));
         for (const r of rem) tiles.push({ id: r.id, at: r.at, jsonId: r.jsonId, remote: true });
-      } catch (err) { console.warn(err); cloudMsg = ' (No se pudo revisar la papelera de Drive.)'; }
+      } catch (err) {
+        console.warn(err);
+        cloudMsg = err.needsSignIn ? ' Para ver también las que están en Drive, reconectá Google (botón de la nube, arriba) y volvé a abrir esta lista.' : ' (No se pudo revisar Drive: ' + (err.message || err) + ')';
+      }
     } else cloudMsg = ' Conectá Google Drive para ver también las eliminadas en otros dispositivos.';
     tiles.sort((a, b) => b.at - a.at);
     note.textContent = (tiles.length ? 'Tocá una para devolverla a la grilla. Se guardan 30 días.' : 'No hay publicaciones eliminadas.') + cloudMsg;
