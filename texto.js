@@ -253,9 +253,12 @@ window.createMosaicoText = function createMosaicoText(A) {
     const ls = (it.texts || []).filter(L => L.type === 'image' && !L.hidden);
     await Promise.all(ls.map(L => { const e = imageOf(L); return e.p ? Promise.race([e.p, new Promise(r => setTimeout(r, 30000))]) : null; }));
   }
+  // Recorte: qué fracción de la imagen se saca de cada lado (0 = nada).
+  const cropOf = L => ({ l: L.cl || 0, r: L.cr || 0, t: L.ct || 0, b: L.cb || 0 });
   function drawImageLayer(ctx, L, x0, H) {
     const W = H * ASPECT, e = imageOf(L);
-    const ar = L.ar || (e.w ? e.w / e.h : 1), h = L.size * H * (L.sy || 1), w = L.size * H * ar * (L.sx || 1);
+    const ar = L.ar || (e.w ? e.w / e.h : 1), c = cropOf(L);
+    const h = L.size * H * (L.sy || 1) * (1 - c.t - c.b), w = L.size * H * ar * (L.sx || 1) * (1 - c.l - c.r);
     L._box = { w: w / H, h: h / H };
     if (L.hidden || e.state !== 'ok') return;
     ctx.save();
@@ -265,7 +268,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     ctx.globalCompositeOperation = BLENDS[L.blend] ? L.blend : 'source-over';
     setShadow(ctx, L, h * 0.35);
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(e.img, -w / 2, -h / 2, w, h);
+    if (c.l || c.r || c.t || c.b) ctx.drawImage(e.img, c.l * e.w, c.t * e.h, (1 - c.l - c.r) * e.w, (1 - c.t - c.b) * e.h, -w / 2, -h / 2, w, h);
+    else ctx.drawImage(e.img, -w / 2, -h / 2, w, h);
     ctx.restore();
   }
   async function addImageFiles(files, it = S.current) {
@@ -736,6 +740,23 @@ window.createMosaicoText = function createMosaicoText(A) {
   const pctScale = v => (v / 10).toFixed(1) + '%';
   slider($('#tSizeRot'), { label: 'Ancho', min: 500, max: 1500, get: L => Math.round((L.sx || 1) * 1000), set: (L, v) => { L.sx = v / 1000; if (v === 1000) delete L.sx; }, fmt: pctScale });
   slider($('#tSizeRot'), { label: 'Alto', min: 500, max: 1500, get: L => Math.round((L.sy || 1) * 1000), set: (L, v) => { L.sy = v / 1000; if (v === 1000) delete L.sy; }, fmt: pctScale });
+  // Recorte de imágenes: lo que queda no se mueve ni cambia de tamaño en la pantalla; sólo se va el borde.
+  const cropSet = side => (L, v) => {
+    const fw = L.size * (L.ar || 1) * (L.sx || 1), fh = L.size * (L.sy || 1);
+    const ctr = c => [(c.l - c.r) / 2 * fw, (c.t - c.b) / 2 * fh];
+    const before = cropOf(L), after = { ...before };
+    const opp = { l: 'r', r: 'l', t: 'b', b: 't' }[side];
+    after[side] = Math.min(v / 1000, 0.98 - after[opp]);
+    const [x0, y0] = ctr(before), [x1, y1] = ctr(after), a = rad(L.rot || 0);
+    const dx = x1 - x0, dy = y1 - y0;
+    L.x += (dx * Math.cos(a) - dy * Math.sin(a)) / ASPECT;
+    L.y += dx * Math.sin(a) + dy * Math.cos(a);
+    const k = 'c' + side;
+    if (after[side] > 0) L[k] = after[side]; else delete L[k];
+  };
+  const pctCrop = v => (v / 10).toFixed(1) + '%';
+  for (const [side, label] of [['t', 'Recortar arriba'], ['b', 'Recortar abajo'], ['l', 'Recortar izquierda'], ['r', 'Recortar derecha']])
+    slider($('#tSizeRot'), { label, min: 0, max: 980, get: L => Math.round((L['c' + side] || 0) * 1000), set: cropSet(side), fmt: pctCrop, cls: 'img-only' });
   slider($('#tSizeRot'), { label: 'Giro', min: -180, max: 180, step: 0.5, get: L => L.rot || 0, set: (L, v) => { L.rot = snapRot(v); }, fmt: v => (Math.abs(v) < 0.05 ? '0' : v > 0 ? '+' + v : v) + '°' });
   slider($('#tLook'), { label: 'Grosor', min: -100, max: 100, get: L => L.weight || 0, set: (L, v) => { L.weight = v; }, fmt: v => (v > 0 ? '+' : '') + v, cls: 'txt-only' });
   slider($('#tLook'), { label: 'Opacidad', min: 5, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct });
