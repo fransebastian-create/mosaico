@@ -527,3 +527,11 @@ body.has-banner { --bh: 44px; }
   #editorPane .bar-actions { gap: 5px; margin-left: auto; }
   #editorPane .bar .chip, #editorPane .bar .btn { padding: 6px 10px; font-size: 13px; }
 }
+
+/* copia en la computadora */
+.bk-body { display: flex; flex-direction: column; gap: 8px; }
+.bk-body .row { display: flex; gap: 8px; } .bk-body .row .btn { flex: 1; }
+#backupList { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+#backupList select { font: inherit; padding: 8px; border-radius: 8px; }
+#backupBtn.ok { color: #2e8b57; }
+#backupBtn.warn { color: var(--danger); border-color: var(--danger); }

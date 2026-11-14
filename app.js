@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.6.8';
+  const VERSION = 'v1.7';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -137,6 +137,7 @@
   const cleanTexts = ts => (ts || []).map(({ _box, ...L }) => L);
   const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, parent: it.parent, slides: it.slides, sync: it.sync || null });
   let Sync = null;   // sincronización con Google Drive (drive.js)
+  let Backup = null;   // copia automática en una carpeta (más abajo)
   const saveTimers = new Map();
   function saveItem(it) {
     it._gen = (it._gen || 0) + 1;
@@ -144,6 +145,7 @@
     clearTimeout(saveTimers.get(it.id));
     saveTimers.set(it.id, setTimeout(() => DB.put('items', meta(it)).catch(reportError), 300));
     if (Sync) Sync.kick();
+    if (Backup) Backup.kick();
   }
   const persistItem = it => DB.put('items', meta(it)).catch(reportError);
   function persistOrder() {
@@ -151,7 +153,7 @@
     DB.put('meta', [...S.deleted], 'deleted').catch(reportError);
     DB.put('meta', !!S.orderDirty, 'orderDirty').catch(reportError);
   }
-  function saveOrder() { S.orderDirty = true; persistOrder(); if (Sync) Sync.kick(); }
+  function saveOrder() { S.orderDirty = true; persistOrder(); if (Sync) Sync.kick(); if (Backup) Backup.kick(); }
   function reportError(e) { console.error(e); toast('Algo falló al guardar: ' + (e && e.message || e)); }
 
   // ================= Utilidades de imagen =================
@@ -1463,6 +1465,7 @@
       const e = { id: it.id, at: Date.now(), meta: meta(it), blobs: b ? { orig: b.orig, thumb: b.thumb } : null, video: v ? v.video : null, media: it.sync && it.sync.media ? { ...it.sync.media } : null, jsonId: it.sync && it.sync.jsonId, where };
       await DB.put('meta', e, 'trash:' + it.id);
       undoStack.push(it.id);
+      Backup.kick(0);
     } catch (e) { console.warn('no se pudo guardar en Eliminadas', e); }
   }
   function afterDelete() {
@@ -1533,7 +1536,7 @@
   // hoja "Eliminadas"
   const trashSheet = $('#trashSheet'), trashList = $('#trashList');
   const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'recién' : m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.round(m / 60)} h` : `hace ${Math.round(m / 1440)} días`; };
-  function tileFor(e) {
+  function tileFor(e, { list = trashList, sheet = trashSheet } = {}) {
     const b = document.createElement('button'); b.className = 'tr-tile';
     const c = document.createElement('canvas'); c.width = 120; c.height = Math.round(120 / S.gridAspect);
     b.append(c);
@@ -1542,6 +1545,7 @@
     b.append(cap);
     b.paint = async () => {
       try {
+        if (e.load) await e.load();
         const m = e.meta; if (!m) return;
         let img;
         if ((m.kind || 'image') === 'blank') img = solidImage(m.bg);
@@ -1560,9 +1564,10 @@
     b.addEventListener('click', async () => {
       if (!e.meta || b.disabled) return;
       b.disabled = true;
+      try { if (e.load) await e.load(); } catch (err) { toast('No se pudo leer la copia: ' + (err.message || err), false, 7000); b.disabled = false; return; }
       const it = await restoreEntry(e, { open: !isNarrow() });
       if (it) b.remove(); else b.disabled = false;
-      if (!trashList.querySelector('.tr-tile')) trashSheet.hidden = true;
+      if (!list.querySelector('.tr-tile')) sheet.hidden = true;
     });
     return b;
   }
@@ -1620,6 +1625,256 @@
     } catch (e) { console.error(e); toast('No se pudo leer el archivo: ' + (e.message || e), false, 8000); }
   });
   trashSheet.addEventListener('click', e => { if (e.target === trashSheet || e.target.closest('[data-close]')) trashSheet.hidden = true; });
+
+  // ================= Copia automática en una carpeta de la computadora =================
+  // Se elige una carpeta una vez (Chrome / Edge de computadora). Ahí se guarda cada proyecto entero:
+  //   <carpeta>/<proyecto>/proyecto.json   todo (orden, publicaciones con sus capas y ajustes, eliminadas, tipografías)
+  //   <carpeta>/<proyecto>/medios/          fotos, videos, imágenes de capas y tipografías (cada archivo se escribe una vez)
+  //   <carpeta>/<proyecto>/copias/AAAA-MM-DD.json   cómo estaba todo ese día (se guardan 45 días)
+  Backup = (() => {
+    const supported = !!window.showDirectoryPicker;
+    let kvDb = null;
+    const kv = async (mode, fn) => {
+      kvDb = kvDb || await new Promise((res, rej) => { const r = indexedDB.open('mosaico-copia', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+      return new Promise((res, rej) => { const t = kvDb.transaction('kv', mode); const q = fn(t.objectStore('kv')); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); });
+    };
+    const kvGet = k => kv('readonly', s => s.get(k)), kvSet = (k, v) => kv('readwrite', s => s.put(v, k));
+    let root = null, perm = 'none', timer = 0, running = false, again = false, mediaNames = null;
+    const st = { phase: supported ? 'off' : 'unsupported', at: 0, msg: '' };
+    const listeners = new Set();
+    const emit = () => listeners.forEach(f => { try { f(st); } catch (e) { console.error(e); } });
+    const set = (phase, msg = '') => { st.phase = phase; st.msg = msg; emit(); };
+    const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic', 'image/svg+xml': 'svg', 'video/quicktime': 'mov', 'video/mp4': 'mp4', 'video/webm': 'webm' };
+    const ext = b => EXT[(b && b.type || '').split(';')[0]] || 'bin';
+    const safe = n => String(n || 'Proyecto').replace(/[\\/:*?"<>|]+/g, '-').trim().slice(0, 60) || 'Proyecto';
+    const day = d => { const z = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`; };
+    async function projectDir(create = true) {
+      let name = await kvGet('folder:' + WS.cur.id);
+      if (!name) { name = safe(WS.cur.name); await kvSet('folder:' + WS.cur.id, name); }
+      return root.getDirectoryHandle(name, { create });
+    }
+    async function writeFile(dir, name, blob) {
+      const fh = await dir.getFileHandle(name, { create: true });
+      const w = await fh.createWritable(); await w.write(blob); await w.close();
+    }
+    async function init() {
+      if (!supported) return emit();
+      try {
+        root = await kvGet('root');
+        if (!root) return set('off');
+        perm = await root.queryPermission({ mode: 'readwrite' });
+        if (perm === 'granted') { set('idle'); kick(1500); } else set('paused');
+      } catch (e) { console.warn(e); set('off'); }
+    }
+    async function choose() {
+      const h = await window.showDirectoryPicker({ id: 'mosaico-copia', mode: 'readwrite', startIn: 'documents' });
+      root = h; perm = 'granted'; mediaNames = null;
+      await kvSet('root', h);
+      set('idle'); await run();
+    }
+    async function resume() {
+      if (!root) return choose();
+      perm = await root.requestPermission({ mode: 'readwrite' });
+      if (perm === 'granted') { set('idle'); await run(); } else set('paused');
+    }
+    function kick(ms = 4000) {
+      if (!root || perm !== 'granted') return;
+      clearTimeout(timer); timer = setTimeout(run, ms);
+    }
+    async function run() {
+      if (!root || perm !== 'granted') return;
+      if (running) { again = true; return; }
+      running = true; again = false; clearTimeout(timer);
+      set('saving');
+      try {
+        if (await root.queryPermission({ mode: 'readwrite' }) !== 'granted') { perm = 'prompt'; set('paused'); return; }
+        const dir = await projectDir();
+        const medios = await dir.getDirectoryHandle('medios', { create: true });
+        const copias = await dir.getDirectoryHandle('copias', { create: true });
+        if (!mediaNames) { mediaNames = new Set(); for await (const [name] of medios.entries()) mediaNames.add(name); }
+        const put = async (name, blob) => {
+          if (!blob) return null;
+          if (!mediaNames.has(name)) { set('saving', 'Copiando ' + name); await writeFile(medios, name, blob); mediaNames.add(name); }
+          return name;
+        };
+        const mediaOf = async (id, b, v) => {
+          const m = {};
+          if (b && b.orig) { m.orig = await put(`${id}-${b.orig.size}.${ext(b.orig)}`, b.orig); if (b.thumb) m.thumb = await put(`${id}-${b.orig.size}-mini.${ext(b.thumb)}`, b.thumb); }
+          else if (b && b.thumb) m.thumb = await put(`${id}-mini-${b.thumb.size}.${ext(b.thumb)}`, b.thumb);
+          if (v) m.video = await put(`${id}-${v.size}.${ext(v)}`, v);
+          return m;
+        };
+        const layerImgs = new Set();
+        const items = [];
+        for (const it of S.items.values()) {
+          const b = it.kind === 'blank' ? null : await DB.get('blobs', it.id).catch(() => null);
+          const v = it.kind === 'video' ? await DB.get('videos', it.id).then(r => r && r.video).catch(() => null) : null;
+          (it.texts || []).forEach(L => { if (L.type === 'image' && L.img) layerImgs.add(L.img); });
+          items.push({ ...meta(it), _media: await mediaOf(it.id, b, v) });
+        }
+        const eliminadas = [];
+        for (const e of await trashEntries().catch(() => [])) {
+          (e.meta.texts || []).forEach(L => { if (L.type === 'image' && L.img) layerImgs.add(L.img); });
+          eliminadas.push({ id: e.id, at: e.at, where: e.where, meta: e.meta, _media: await mediaOf(e.id, e.blobs, e.video) });
+        }
+        const capas = {};
+        for (const img of layerImgs) {
+          const r = await DB.get('blobs', 'L:' + img).catch(() => null);
+          if (r && r.orig) capas[img] = await put(`capa-${img}-${r.orig.size}.${ext(r.orig)}`, r.orig);
+        }
+        const fuentes = [];
+        for (const f of await DB.getAll('fonts').catch(() => [])) {
+          if (f.blob) fuentes.push({ id: f.id, name: f.name, ext: f.ext, file: await put(`fuente-${f.id}.${f.ext || 'ttf'}`, f.blob) });
+        }
+        const now = new Date();
+        const doc = { app: 'Mosaico', formato: 1, version: VERSION, proyecto: WS.cur.name, guardado: now.toISOString(), orden: S.order, publicaciones: items, eliminadas, capas, fuentes };
+        // Protección: si desapareció algo sin pasar por "Eliminadas" (p. ej. el navegador borró sus datos),
+        // la copia anterior no se pisa: se guarda aparte. Y nunca se reemplaza una copia con contenido por una vacía.
+        let prev = null;
+        try { prev = JSON.parse(await (await (await dir.getFileHandle('proyecto.json')).getFile()).text()); } catch { }
+        if (prev) {
+          const ids = d => new Set([...(d.publicaciones || []).map(x => x.id), ...(d.eliminadas || []).map(x => x.id)]);
+          const was = ids(prev), nowIds = ids(doc), lost = [...was].filter(id => !nowIds.has(id));
+          if (lost.length && !items.length) { st.at = Date.now(); set('idle', 'El proyecto está vacío en este navegador: la copia no se tocó'); return; }
+          if (lost.length) {
+            const pd = prev.guardado ? new Date(prev.guardado) : now, z = n => String(n).padStart(2, '0');
+            const tag = `${day(pd)} ${z(pd.getHours())}.${z(pd.getMinutes())}`;
+            await writeFile(copias, `${tag} antes de que faltaran ${lost.length}.json`, new Blob([JSON.stringify(prev)], { type: 'application/json' }));
+          }
+        }
+        const json = new Blob([JSON.stringify(doc)], { type: 'application/json' });
+        await writeFile(dir, 'proyecto.json', json);
+        await writeFile(copias, day(now) + '.json', json);
+        // copias de más de 45 días: afuera
+        const old = [];
+        for await (const [name] of copias.entries()) if (/^\d{4}-\d\d-\d\d\.json$/.test(name) && Date.now() - Date.parse(name.slice(0, 10)) > 45 * 864e5) old.push(name);
+        for (const n of old) await copias.removeEntry(n).catch(() => { });
+        st.at = Date.now(); set('idle');
+      } catch (e) {
+        console.error(e);
+        if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) { perm = 'prompt'; set('paused'); }
+        else if (e && e.name === 'NotFoundError') { set('error', 'no se encuentra la carpeta (¿se movió o se borró?)'); }
+        else set('error', e.message || String(e));
+      } finally {
+        running = false;
+        if (again) kick(1500);
+      }
+    }
+    // Leer una copia (proyecto.json o la de un día) para recuperar publicaciones.
+    async function listCopies() {
+      const dir = await projectDir(false);
+      const copias = await dir.getDirectoryHandle('copias', { create: true });
+      const out = [];
+      for await (const [name] of copias.entries()) if (/\.json$/.test(name)) out.push(name);
+      return out.sort().reverse();
+    }
+    async function readCopy(name) {
+      const dir = await projectDir(false);
+      const fh = name ? await (await dir.getDirectoryHandle('copias')).getFileHandle(name) : await dir.getFileHandle('proyecto.json');
+      const doc = JSON.parse(await (await fh.getFile()).text());
+      const medios = await dir.getDirectoryHandle('medios');
+      const file = async n => (n ? (await medios.getFileHandle(n)).getFile() : null);
+      return { doc, file };
+    }
+    setInterval(() => kick(0), 5 * 60e3);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) kick(0); });
+    return { supported, init, choose, resume, kick, run, listCopies, readCopy, state: () => st, onChange: f => { listeners.add(f); f(st); }, folderName: () => root && root.name };
+  })();
+
+  // ---- botón y hoja de la copia ----
+  const backupBtn = $('#backupBtn'), backupSheet = $('#backupSheet'), backupBody = $('#backupBody'), backupList = $('#backupList');
+  function backupChip(st) {
+    backupBtn.hidden = !Backup.supported;
+    backupBtn.classList.remove('ok', 'warn');
+    const t = { off: 'Copia en la compu', idle: 'Copia ✓', saving: 'Copiando…', paused: 'Copia en pausa', error: 'Copia: error' }[st.phase] || 'Copia';
+    backupBtn.textContent = t;
+    if (st.phase === 'idle') backupBtn.classList.add('ok');
+    if (st.phase === 'paused' || st.phase === 'error') backupBtn.classList.add('warn');
+    if (!backupSheet.hidden) renderBackup();
+  }
+  function renderBackup() {
+    const st = Backup.state(), f = Backup.folderName();
+    let h = '';
+    if (st.phase === 'off') {
+      h = `<p>Elegí una carpeta de tu computadora y Mosaico va a guardar ahí, solo y todo el tiempo, una copia entera de este proyecto: fotos, videos, textos, capas, ajustes y también las eliminadas.</p>
+        <p class="muted-s">Puede ser una carpeta dentro de Documentos, de iCloud Drive o de Dropbox, o un disco externo. Cada día queda además una copia con fecha.</p>
+        <button class="btn primary" data-bk="choose">Elegir carpeta…</button>`;
+    } else if (st.phase === 'paused') {
+      h = `<p>La copia está en pausa: el navegador pide permiso de nuevo para escribir en <b>${escHtml(f || 'la carpeta')}</b>.</p>
+        <p class="muted-s">Cuando Chrome pregunte, elegí <b>Permitir en cada visita</b> y no lo vuelve a pedir.</p>
+        <button class="btn primary" data-bk="resume">Seguir copiando</button>`;
+    } else {
+      const when = st.at ? ago(st.at) : 'todavía no';
+      h = `<p>Se copia todo a <b>${escHtml(f || '')}</b> / <b>${escHtml(WS.cur.name)}</b>.</p>
+        <p class="muted-s">${st.phase === 'saving' ? escHtml(st.msg || 'Copiando…') : st.phase === 'error' ? 'Error: ' + escHtml(st.msg) : st.msg ? escHtml(st.msg) : 'Última copia: ' + when}</p>
+        <div class="row"><button class="btn" data-bk="now">Copiar ahora</button><button class="btn" data-bk="choose">Cambiar carpeta…</button></div>
+        <button class="btn" data-bk="browse">Recuperar algo de la copia…</button>`;
+    }
+    backupBody.innerHTML = h;
+  }
+  async function browseBackup(name) {
+    backupList.replaceChildren();
+    const note = document.createElement('p'); note.className = 'muted-s'; note.textContent = 'Leyendo la copia…';
+    backupList.append(note);
+    try {
+      const copies = await Backup.listCopies();
+      const { doc, file } = await Backup.readCopy(name);
+      const sel = document.createElement('select');
+      sel.innerHTML = `<option value="">La más reciente (${escHtml(new Date(doc.guardado).toLocaleString())})</option>` + copies.map(c => `<option value="${escHtml(c)}"${c === name ? ' selected' : ''}>${/^\d{4}-\d\d-\d\d\.json$/.test(c) ? 'Cómo estaba el ' + escHtml(c.slice(8, 10) + '/' + c.slice(5, 7) + '/' + c.slice(0, 4)) : 'Copia de seguridad ' + escHtml(c.replace(/\.json$/, ''))}</option>`).join('');
+      if (name) sel.value = name;
+      sel.addEventListener('change', () => browseBackup(sel.value || undefined));
+      const entries = [];
+      const mk = (m, media, at, tag) => {
+        const e = { id: m.id, at, meta: { ...m, _media: undefined }, tag, where: { index: 0 } };
+        delete e.meta._media;
+        e.load = async () => {
+          if (e.loaded) return;
+          const g = async n => { const f = await file(n).catch(() => null); return f ? new Blob([f], { type: f.type || '' }) : null; };
+          e.blobs = { orig: await g(media.orig), thumb: await g(media.thumb) };
+          if (!e.blobs.orig) e.blobs = null;   // si no está el original, se usa Drive
+          if (media.video) e.video = await g(media.video);
+          for (const L of m.texts || []) {   // imágenes de capas que falten en este dispositivo
+            if (L.type !== 'image' || !L.img || !doc.capas || !doc.capas[L.img]) continue;
+            const have = await DB.get('blobs', 'L:' + L.img).catch(() => null);
+            if (!have) { const b = await g(doc.capas[L.img]); if (b) await DB.put('blobs', { id: 'L:' + L.img, orig: b }); }
+          }
+          e.loaded = true;
+        };
+        return e;
+      };
+      const t0 = Date.parse(doc.guardado) || Date.now();
+      for (const m of doc.publicaciones || []) {
+        if (m.parent) continue;   // las diapositivas de un carrusel se listan aparte abajo
+        entries.push(mk(m, m._media || {}, t0, S.items.has(m.id) ? 'en la grilla' : 'no está en la grilla'));
+      }
+      for (const m of doc.publicaciones || []) if (m.parent) entries.push(mk(m, m._media || {}, t0, 'diapositiva' + (S.items.has(m.id) ? '' : ' (no está)')));
+      for (const d of doc.eliminadas || []) entries.push(mk(d.meta, d._media || {}, d.at, 'eliminada ' + ago(d.at)));
+      entries.sort((a, b) => (a.tag === 'en la grilla') - (b.tag === 'en la grilla'));
+      backupList.replaceChildren(sel);
+      const info = document.createElement('p'); info.className = 'muted-s';
+      info.textContent = `${entries.length} en esta copia. Tocá una para traerla a la grilla (vuelve como una publicación nueva, arriba de todo).`;
+      backupList.append(info);
+      const grid = document.createElement('div'); grid.className = 'tr-list'; backupList.append(grid);
+      for (const e of entries) {
+        const el = tileFor(e, { list: grid, sheet: backupSheet });
+        el.querySelector('.tr-cap').textContent = `${e.meta.name || 'Publicación'} · ${e.tag}`;
+        grid.append(el); el.paint();
+      }
+    } catch (e) { console.error(e); note.textContent = 'No se pudo leer la copia: ' + (e.message || e); }
+  }
+  backupBtn.addEventListener('click', () => { backupSheet.hidden = false; backupList.replaceChildren(); renderBackup(); });
+  backupSheet.addEventListener('click', async e => {
+    if (e.target === backupSheet || e.target.closest('[data-close]')) { backupSheet.hidden = true; return; }
+    const b = e.target.closest('[data-bk]'); if (!b) return;
+    try {
+      if (b.dataset.bk === 'choose') await Backup.choose();
+      else if (b.dataset.bk === 'resume') await Backup.resume();
+      else if (b.dataset.bk === 'now') await Backup.run();
+      else if (b.dataset.bk === 'browse') await browseBackup();
+    } catch (err) { if (err && err.name === 'AbortError') return; console.error(err); toast('No se pudo: ' + (err.message || err), false, 7000); }
+  });
+  Backup.onChange(backupChip);
+  Backup.init();
 
   // ---- duplicar una publicación entera (si es carrusel, con todas sus diapositivas) ----
   let dupBusy = false;
