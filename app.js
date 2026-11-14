@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.6.4';
+  const VERSION = 'v1.6.5';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -489,8 +489,14 @@
   }
 
   let toastTimer;
-  function toast(msg, sticky = false, ms = 2600) {
+  function toast(msg, sticky = false, ms = 2600, action = null) {
     const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+    t.classList.toggle('act', !!action);
+    if (action) {
+      const b = document.createElement('button'); b.textContent = action.label;
+      b.addEventListener('click', () => { t.classList.remove('show', 'act'); action.fn(); });
+      t.append(' ', b);
+    }
     clearTimeout(toastTimer);
     if (!sticky) toastTimer = setTimeout(() => t.classList.remove('show'), ms);
   }
@@ -1399,15 +1405,18 @@
     const it = S.current; if (!it) return;
     const lead = leaderOf(it), list = slidesOf(lead).map(x => x.id);
     if (list.length > 1) {   // diapositiva de un carrusel: sólo se va esa
-      if (!confirm('¿Quitar esta diapositiva del carrusel? (Las demás quedan. El archivo original de tu equipo no se toca.)')) return;
+      if (!confirm('¿Quitar esta diapositiva del carrusel? (Las demás quedan. Esta queda en “Eliminadas” por 30 días.)')) return;
       const k = list.indexOf(it.id), rest = list.filter(id => id !== it.id);
+      await toTrash(it, { sib: rest[0], k });
       setSlides(rest, lead.id);
       await dropItem(it);
       renderGrid(); openEditor(rest[Math.min(k, rest.length - 1)]);
+      afterDelete();
       return;
     }
-    if (!confirm('¿Sacar esta foto de la grilla? (El archivo original de tu equipo no se toca.)')) return;
+    if (!confirm('¿Sacar esta publicación de la grilla? (Queda en “Eliminadas” por 30 días.)')) return;
     const idx = S.order.indexOf(it.id);
+    await toTrash(it, { index: idx });
     S.order.splice(idx, 1); S.items.delete(it.id);
     if (S.full && S.full.id === it.id) S.full = null;
     if (S.video && S.video.id === it.id) { clearTimeout(commitTimer); closeVideo(S.video.v); S.video = null; }
@@ -1417,6 +1426,7 @@
     S.deleted.add(it.id);
     if (Sync) Sync.trashItem(it);
     saveOrder(); renderGrid();
+    afterDelete();
     const next = S.order[Math.min(idx, S.order.length - 1)];
     if (next && !isNarrow()) openEditor(next); else closeEditorMobile();
   });
@@ -1432,6 +1442,161 @@
     if (Sync) Sync.trashItem(it);
     saveOrder();
   }
+
+  // ---- papelera: lo eliminado se guarda 30 días en el dispositivo; lo que está en la papelera de Drive también se puede traer ----
+  // Al recuperar, la publicación vuelve con un id nuevo (el viejo queda como eliminado en todos lados y no hace lío).
+  const TRASH_DAYS = 30, TRASH_MAX = 60;
+  const undoStack = [];   // eliminadas en esta sesión (para Ctrl+Z / Deshacer)
+  async function trashEntries() {
+    const db = await DB.open();
+    return new Promise((res, rej) => {
+      const out = [], t = db.transaction('meta'), r = t.objectStore('meta').openCursor(IDBKeyRange.bound('trash:', 'trash:￿'));
+      r.onsuccess = () => { const c = r.result; if (c) { out.push(c.value); c.continue(); } };
+      t.oncomplete = () => res(out); t.onerror = () => rej(t.error);
+    });
+  }
+  const trashDel = id => DB.run(['meta'], 'readwrite', t => { t.objectStore('meta').delete('trash:' + id); }).catch(() => { });
+  async function toTrash(it, where) {
+    try {
+      const [b, v] = await Promise.all([DB.get('blobs', it.id), DB.get('videos', it.id)]);
+      const e = { id: it.id, at: Date.now(), meta: meta(it), blobs: b ? { orig: b.orig, thumb: b.thumb } : null, video: v ? v.video : null, media: it.sync && it.sync.media ? { ...it.sync.media } : null, jsonId: it.sync && it.sync.jsonId, where };
+      await DB.put('meta', e, 'trash:' + it.id);
+      undoStack.push(it.id);
+    } catch (e) { console.warn('no se pudo guardar en Eliminadas', e); }
+  }
+  function afterDelete() {
+    toast('Publicación eliminada', false, 7000, { label: 'Deshacer', fn: undoDelete });
+  }
+  async function pruneTrash() {
+    try {
+      const es = (await trashEntries()).sort((a, b) => b.at - a.at);
+      const old = es.filter((e, i) => i >= TRASH_MAX || Date.now() - e.at > TRASH_DAYS * 864e5);
+      for (const e of old) await trashDel(e.id);
+    } catch (e) { console.warn(e); }
+  }
+  setTimeout(pruneTrash, 8000);
+  async function undoDelete() {
+    while (undoStack.length) {
+      const id = undoStack.pop();
+      const e = await DB.get('meta', 'trash:' + id).catch(() => null);
+      if (e) return restoreEntry(e);
+    }
+    toast('No hay nada para deshacer');
+  }
+  const recoveredIds = () => DB.get('meta', 'recovered').then(x => new Set(x || [])).catch(() => new Set());
+  async function markRecovered(id, jsonId) {
+    const r = await recoveredIds(); r.add(id);
+    await DB.put('meta', [...r].slice(-500), 'recovered').catch(() => { });
+    await trashDel(id);
+    if (Sync && jsonId) Sync.markRecovered(jsonId);
+  }
+  // e: { id, meta, blobs?, video?, media?, where?, jsonId? }
+  async function restoreEntry(e, { open = true } = {}) {
+    const m = e.meta, kind = m.kind || 'image';
+    toast('Recuperando ' + (m.name || 'la publicación') + '…', true);
+    try {
+      const id = uid();
+      const it = structuredClone({ ...meta({ ...m, id }), sync: null });
+      delete it.parent; delete it.slides;
+      const fetchF = fid => { if (!fid || !Sync) throw new Error('el archivo está en Drive y no hay conexión'); return Sync.fetchFile(fid); };
+      if (kind !== 'blank') {
+        let orig = e.blobs && e.blobs.orig, thumb = e.blobs && e.blobs.thumb;
+        if (!orig) orig = await fetchF(e.media && e.media.orig);
+        if (!thumb) thumb = e.media && e.media.thumb ? await fetchF(e.media.thumb).catch(() => orig) : orig;
+        await DB.put('blobs', { id, orig, thumb });
+        it.thumb = await loadImage(thumb);
+        if (kind === 'video') {
+          const v = e.video || await fetchF(e.media && e.media.video);
+          await DB.put('videos', { id, video: v });
+        }
+      } else it.thumb = solidImage(it.bg);
+      await DB.put('items', meta(it));
+      S.items.set(id, it);
+      // vuelve a su lugar: a su carrusel si todavía existe, o a su posición en la grilla
+      const w = e.where || {};
+      const sibId = w.sib || (m.parent && S.items.has(m.parent) ? m.parent : null);
+      const sib = sibId && S.items.get(sibId);
+      if (sib) {
+        const lead = leaderOf(sib), ids = slidesOf(lead).map(x => x.id);
+        ids.splice(Math.min(w.k ?? ids.length, ids.length), 0, id);
+        setSlides(ids, lead.id);
+      } else S.order.splice(clamp(w.index ?? 0, 0, S.order.length), 0, id);
+      saveItem(it); saveOrder(); renderGrid();
+      await markRecovered(e.id, e.jsonId);
+      if (open) await openEditor(id);
+      toast((m.name ? '“' + m.name + '”' : 'La publicación') + ' volvió a la grilla');
+      return it;
+    } catch (err) { console.error(err); toast('No se pudo recuperar: ' + (err.message || err), false, 8000); }
+  }
+
+  // hoja "Eliminadas"
+  const trashSheet = $('#trashSheet'), trashList = $('#trashList');
+  const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'recién' : m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.round(m / 60)} h` : `hace ${Math.round(m / 1440)} días`; };
+  function tileFor(e) {
+    const b = document.createElement('button'); b.className = 'tr-tile';
+    const c = document.createElement('canvas'); c.width = 120; c.height = Math.round(120 / S.gridAspect);
+    b.append(c);
+    const cap = document.createElement('span'); cap.className = 'tr-cap';
+    cap.textContent = `${e.meta ? e.meta.name || 'Publicación' : 'Cargando…'} · ${ago(e.at)}`;
+    b.append(cap);
+    b.paint = async () => {
+      try {
+        const m = e.meta; if (!m) return;
+        let img;
+        if ((m.kind || 'image') === 'blank') img = solidImage(m.bg);
+        else {
+          let tb = e.blobs && (e.blobs.thumb || e.blobs.orig);
+          if (!tb && e.media && e.media.thumb && Sync) tb = await Sync.fetchFile(e.media.thumb);
+          if (!tb) return;
+          img = await loadImage(tb);
+        }
+        const tmp = { ...structuredClone(m), thumb: img, canvas: canvas(1, 1) };
+        await T.fontsReady(tmp).catch(() => { });
+        drawThumb(tmp);
+        c.getContext('2d').drawImage(tmp.canvas, 0, 0, c.width, c.height);
+      } catch (err) { console.warn(err); }
+    };
+    b.addEventListener('click', async () => {
+      if (!e.meta || b.disabled) return;
+      b.disabled = true;
+      const it = await restoreEntry(e, { open: !isNarrow() });
+      if (it) b.remove(); else b.disabled = false;
+      if (!trashList.querySelector('.tr-tile')) trashSheet.hidden = true;
+    });
+    return b;
+  }
+  async function openTrash() {
+    trashSheet.hidden = false;
+    trashList.replaceChildren();
+    const note = $('#trashNote');
+    note.textContent = 'Buscando…';
+    const done = await recoveredIds();
+    const local = (await trashEntries().catch(() => [])).filter(e => !done.has(e.id));
+    const tiles = [];
+    const known = new Set(local.map(e => e.id));
+    for (const e of local) tiles.push(e);
+    let cloudMsg = '';
+    if (Sync && Sync.state().project) {
+      try {
+        const rem = (await Sync.listTrashed()).filter(r => !known.has(r.id) && !done.has(r.id) && !S.items.has(r.id));
+        for (const r of rem) tiles.push({ id: r.id, at: r.at, jsonId: r.jsonId, remote: true });
+      } catch (err) { console.warn(err); cloudMsg = ' (No se pudo revisar la papelera de Drive.)'; }
+    } else cloudMsg = ' Conectá Google Drive para ver también las eliminadas en otros dispositivos.';
+    tiles.sort((a, b) => b.at - a.at);
+    note.textContent = (tiles.length ? 'Tocá una para devolverla a la grilla. Se guardan 30 días.' : 'No hay publicaciones eliminadas.') + cloudMsg;
+    for (const e of tiles.slice(0, TRASH_MAX)) {
+      const el = tileFor(e); trashList.append(el);
+      if (e.remote) {
+        Sync.fetchJSON(e.jsonId).then(doc => {
+          e.meta = doc; e.media = doc.media || {};
+          el.querySelector('.tr-cap').textContent = `${doc.name || 'Publicación'} · ${ago(e.at)}`;
+          el.paint();
+        }).catch(err => { console.warn(err); el.querySelector('.tr-cap').textContent = 'No se pudo leer'; });
+      } else el.paint();
+    }
+  }
+  $('#trashBtn').addEventListener('click', openTrash);
+  trashSheet.addEventListener('click', e => { if (e.target === trashSheet || e.target.closest('[data-close]')) trashSheet.hidden = true; });
 
   // ---- duplicar una publicación entera (si es carrusel, con todas sus diapositivas) ----
   let dupBusy = false;
@@ -1659,7 +1824,8 @@
     const tag = (e.target.tagName || '').toLowerCase();
     if ((tag === 'input' && e.target.type !== 'range') || tag === 'textarea' || tag === 'select') return;
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyPost(); e.preventDefault(); }
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && undoStack.length) { undoDelete(); e.preventDefault(); }
+    else if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyPost(); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'd') { duplicatePost(S.current); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'v' && S.lastCopied === 'post' && S.postClip) { pastePost(); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'v' && S.lastCopied === 'layer' && T.hasLayerClip()) { T.pasteLayer(); e.preventDefault(); }

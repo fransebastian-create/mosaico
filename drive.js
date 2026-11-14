@@ -579,6 +579,15 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     if (!hasToken()) throw new Error('Conectá Google para bajar el archivo original');
     return download(it.sync.media[role]);
   }
+  // Papelera: publicaciones eliminadas (en cualquier dispositivo) que siguen en la papelera de Drive.
+  async function listTrashed() {
+    if (!st.project || !hasToken()) return [];
+    const q = `'${esc(st.project.datosId)}' in parents and trashed=true and appProperties has { key='mosaicoRole' and value='item' }`;
+    const fs = await listAll(q, 'id,name,modifiedTime,trashedTime,appProperties');
+    return fs.filter(f => !(f.appProperties && f.appProperties.mosaicoRecovered))
+      .map(f => ({ jsonId: f.id, id: f.appProperties.mosaicoId, at: Date.parse(f.trashedTime || f.modifiedTime) || 0 }));
+  }
+  const markRecovered = jsonId => api('PATCH', '/files/' + jsonId, { query: { supportsAllDrives: true }, body: { appProperties: { mosaicoRecovered: '1' } } }).catch(e => console.warn('no se pudo marcar', e));
   async function trashItem(it) {
     if (!it.sync || !st.project || it.sync.project !== st.project.id || !hasToken()) return;
     const ids = [it.sync.jsonId, ...Object.values(it.sync.media || {})].filter(Boolean);
@@ -595,7 +604,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
   return {
     state, onChange(f) { st.listeners.add(f); f(state()); return () => st.listeners.delete(f); },
     signIn, signOut, findProjects, createProject, openProject, leaveProject, renameProject, share, folderUrl,
-    kick, fetchMedia, trashItem, syncNow: () => kick(0),
+    kick, fetchMedia, trashItem, listTrashed, markRecovered, fetchJSON: downloadJSON, syncNow: () => kick(0),
     fetchFile: id => download(id, 60000),
     trashFile: id => { if (hasToken()) trash(id); },
     fromRedirect: back ? (back.error || 'ok') : null,   // volvimos recién de Google (celulares)
