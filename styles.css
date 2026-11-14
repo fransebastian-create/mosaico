@@ -588,6 +588,17 @@ body.has-banner { --bh: 44px; }
 .sw.none { background: repeating-conic-gradient(#d8d8d8 0 25%, #fff 0 50%) 0 0 / 10px 10px; position: relative; overflow: hidden; }
 .sw.none::after { content: ""; position: absolute; left: 50%; top: -20%; height: 140%; border-left: 2px solid #e3574a; transform: rotate(45deg); }
 @media (pointer: coarse) { .tcorner { width: 18px; height: 18px; } .tcorner.tl, .tcorner.tr { top: -10px; } .tcorner.bl, .tcorner.br { bottom: -10px; } .tcorner.tl, .tcorner.bl { left: -10px; } .tcorner.tr, .tcorner.br { right: -10px; } .tbox.shape .thandle { top: -44px; margin-left: -15px; } .tbox.shape:not(.multi):not(.locked)::before { top: -16px; height: 16px; } }
+/* líneas: dos puntas en vez de esquinas */
+.tbox.line { border-color: transparent; box-shadow: none; }
+.tbox.line .tcorner, .tbox.line .tside, .tbox.line .trad, .tbox.line .thandle, .tbox.line::before { display: none !important; }
+.tend { display: none; position: absolute; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; pointer-events: auto; touch-action: none; background: #fff; border: 2px solid #3b82f6; box-shadow: 0 1px 4px rgba(0,0,0,.4); cursor: crosshair; }
+.tend.a { left: -1px; } .tend.b { right: -1px; }
+.tbox.line:not(.multi):not(.locked) .tend { display: block; }
+.tbox.line.multi, .tbox.line.locked { border-color: rgba(255,255,255,.95); box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+.tmag { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid #ff3ea5; background: rgba(255,62,165,.25); pointer-events: none; opacity: 0; }
+.tmag.on { opacity: 1; } .tmag.edge { width: 10px; height: 10px; margin: -5px 0 0 -5px; }
+#textPanel.is-line .no-line, #textPanel:not(.is-line) .line-only { display: none !important; }
+@media (pointer: coarse) { .tend { width: 22px; height: 22px; margin-top: -11px; } .tend.a { left: -5px; } .tend.b { right: -5px; } }
 @media (pointer: coarse) { .tside.r { width: 14px; height: 34px; margin-top: -17px; right: -8px; } .tside.b { width: 34px; height: 14px; margin-left: -17px; bottom: -8px; } .trad { width: 18px; height: 18px; margin: -9px 0 0 -9px; } }
 
 /* aviso de versión nueva */

@@ -267,7 +267,25 @@ window.createMosaicoText = function createMosaicoText(A) {
     ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
     ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r); ctx.closePath();
   }
+  const isLine = L => !!L && L.type === 'shape' && L.shape === 'line';
+  // Línea: L.size = largo (unidades del alto), L.th = grosor, L.rot = ángulo; L.x/L.y = punto medio
+  function drawLine(ctx, L, x0, H) {
+    const W = H * ASPECT, w = L.size * H, th = Math.max(0.5, (L.th || 0.006) * H);
+    L._box = { w: L.size, h: L.th || 0.006 };
+    if (L.hidden) return;
+    ctx.save();
+    ctx.translate(x0 + L.x * W, L.y * H);
+    ctx.rotate(rad(L.rot || 0));
+    ctx.globalAlpha = clamp(L.opacity ?? 1, 0, 1);
+    ctx.globalCompositeOperation = BLENDS[L.blend] ? L.blend : 'source-over';
+    setShadow(ctx, L, th * 4);
+    ctx.beginPath(); ctx.moveTo(-w / 2, 0); ctx.lineTo(w / 2, 0);
+    ctx.lineWidth = th; ctx.lineCap = L.cap === 'butt' ? 'butt' : 'round'; ctx.strokeStyle = L.color || '#ffffff';
+    ctx.stroke();
+    ctx.restore();
+  }
   function drawShape(ctx, L, x0, H) {
+    if (L.shape === 'line') return drawLine(ctx, L, x0, H);
     const W = H * ASPECT, h = L.size * H, w = L.size * (L.ar || 1) * H;
     L._box = { w: w / H, h: h / H };
     if (L.hidden) return;
@@ -292,7 +310,9 @@ window.createMosaicoText = function createMosaicoText(A) {
   function addShape(shape = 'rect') {
     const it = S.current; if (!it) return;
     it.texts = it.texts || [];
-    const L = { id: uid(), type: 'shape', shape, x: 0.5, y: 0.5, rot: 0, size: 0.25, ar: shape === 'ellipse' ? 1 : 1, radius: 0, color: lastShapeColor, opacity: 1, fill: true, bv: 1 };
+    const L = shape === 'line'
+      ? { id: uid(), type: 'shape', shape, x: 0.5, y: 0.5, rot: 0, size: 0.4, th: 0.006, cap: 'round', color: lastShapeColor, opacity: 1, bv: 1 }
+      : { id: uid(), type: 'shape', shape, x: 0.5, y: 0.5, rot: 0, size: 0.25, ar: 1, radius: 0, color: lastShapeColor, opacity: 1, fill: true, bv: 1 };
     while (it.texts.some(o => Math.abs(o.x - L.x) < 0.01 && Math.abs(o.y - L.y) < 0.01)) L.y = Math.min(0.9, L.y + 0.08);
     it.texts.push(L);
     select(L.id); changed();
@@ -483,7 +503,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   // ---- recuadro de selección y guías ----
   const layer = document.createElement('div'); layer.className = 'tlayer';
-  layer.innerHTML = '<div class="tsnap v"></div><div class="tsnap h"></div><div class="tbox" hidden><div class="thandle" title="Arrastrá para agrandar y girar"></div><div class="tside r" title="Arrastrá para cambiar el ancho"></div><div class="tside b" title="Arrastrá para cambiar el alto"></div><div class="trad" title="Arrastrá hacia adentro para redondear los bordes"></div><div class="tcorner tl"></div><div class="tcorner tr"></div><div class="tcorner bl"></div><div class="tcorner br"></div></div>';
+  layer.innerHTML = '<div class="tsnap v"></div><div class="tsnap h"></div><div class="tbox" hidden><div class="thandle" title="Arrastrá para agrandar y girar"></div><div class="tside r" title="Arrastrá para cambiar el ancho"></div><div class="tside b" title="Arrastrá para cambiar el alto"></div><div class="trad" title="Arrastrá hacia adentro para redondear los bordes"></div><div class="tcorner tl"></div><div class="tcorner tr"></div><div class="tcorner bl"></div><div class="tcorner br"></div><div class="tend a" title="Arrastrá la punta (Mayúscula: recta o a 45° · Alt: sin imán)"></div><div class="tend b" title="Arrastrá la punta (Mayúscula: recta o a 45° · Alt: sin imán)"></div></div><div class="tmag"></div>';
   frame.append(layer);
   const box = layer.querySelector('.tbox'), handle = layer.querySelector('.thandle');
   const sideR = layer.querySelector('.tside.r'), sideB = layer.querySelector('.tside.b'), radH = layer.querySelector('.trad');
@@ -508,7 +528,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!L || !L._box) { box.hidden = true; return; }
     placeBox(box, L);
     box.classList.toggle('multi', isMulti());
-    box.classList.toggle('shape', isShape(L)); box.classList.toggle('ellipse', isShape(L) && L.shape === 'ellipse'); handle.title = isShape(L) ? 'Arrastrá para girar' : 'Arrastrá para agrandar y girar';
+    box.classList.toggle('shape', isShape(L)); box.classList.toggle('ellipse', isShape(L) && L.shape === 'ellipse'); box.classList.toggle('line', isLine(L)); handle.title = isShape(L) ? 'Arrastrá para girar' : 'Arrastrá para agrandar y girar';
     if (isShape(L)) {   // tirador de redondeo: más adentro cuanto más redondeado
       const Hc = frame.clientHeight, w = L.size * (L.ar || 1) * Hc, h = L.size * Hc;
       const m = 12 + (L.radius || 0) * Math.min(w, h) * 0.35;
@@ -702,6 +722,82 @@ window.createMosaicoText = function createMosaicoText(A) {
     el.addEventListener('pointercancel', sideEnd);
   });
 
+  // ---- líneas: arrastrar cada punta; Mayúscula traba el ángulo de a 45°, y el imán la pega a otras formas y a la publicación ----
+  const magDot = layer.querySelector('.tmag');
+  const lineEnds = L => { const a = rad(L.rot || 0), hx = Math.cos(a) * L.size / 2, hy = Math.sin(a) * L.size / 2, X = L.x * ASPECT; return [{ x: X - hx, y: L.y - hy }, { x: X + hx, y: L.y + hy }]; };   // en unidades del alto
+  const nearSeg = (p, a, b) => { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy, t = l2 ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0, 1) : 0; return { x: a.x + t * dx, y: a.y + t * dy }; };
+  // puntos y bordes a los que se puede pegar una punta (todo en unidades del alto)
+  function magnetTargets(self) {
+    const pts = [], segs = [], A_ = ASPECT;
+    const corners = [{ x: 0, y: 0 }, { x: A_, y: 0 }, { x: A_, y: 1 }, { x: 0, y: 1 }];
+    pts.push(...corners, { x: A_ / 2, y: 0 }, { x: A_, y: 0.5 }, { x: A_ / 2, y: 1 }, { x: 0, y: 0.5 }, { x: A_ / 2, y: 0.5 });
+    corners.forEach((c, i) => segs.push([c, corners[(i + 1) % 4]]));
+    for (const L of (S.current && S.current.texts) || []) {
+      if (L === self || L.hidden || !L._box) continue;
+      const cx = L.x * A_, cy = L.y, a = rad(L.rot || 0), co = Math.cos(a), si = Math.sin(a);
+      const at = (lx, ly) => ({ x: cx + lx * co - ly * si, y: cy + lx * si + ly * co });
+      if (isLine(L)) { const [e0, e1] = lineEnds(L); pts.push(e0, e1, { x: cx, y: cy }); segs.push([e0, e1]); continue; }
+      const hw = L._box.w / 2, hh = L._box.h / 2;
+      pts.push({ x: cx, y: cy });
+      if (isShape(L) && L.shape === 'ellipse') {
+        pts.push(at(hw, 0), at(-hw, 0), at(0, hh), at(0, -hh));
+        let prev = at(hw, 0);
+        for (let i = 1; i <= 72; i++) { const t = i / 72 * Math.PI * 2, q = at(Math.cos(t) * hw, Math.sin(t) * hh); segs.push([prev, q]); prev = q; }
+        continue;
+      }
+      const c4 = [at(-hw, -hh), at(hw, -hh), at(hw, hh), at(-hw, hh)];
+      pts.push(...c4, at(0, -hh), at(hw, 0), at(0, hh), at(-hw, 0));
+      c4.forEach((c, i) => segs.push([c, c4[(i + 1) % 4]]));
+    }
+    return { pts, segs };
+  }
+  function magnet(p, self, H) {
+    const { pts, segs } = magnetTargets(self), rp = 11 / H, rs = 7 / H;
+    let best = null, bd = rp;
+    for (const q of pts) { const d = Math.hypot(q.x - p.x, q.y - p.y); if (d < bd) { bd = d; best = q; } }
+    if (best) return { p: best, hit: 'pt' };
+    bd = rs;
+    for (const [a, b] of segs) { const q = nearSeg(p, a, b), d = Math.hypot(q.x - p.x, q.y - p.y); if (d < bd) { bd = d; best = q; } }
+    return best ? { p: best, hit: 'edge' } : { p, hit: null };
+  }
+  function showMag(m) {
+    if (!m || !m.hit) { magDot.classList.remove('on'); return; }
+    const Hc = frame.clientHeight;
+    magDot.style.left = m.p.x * Hc + 'px'; magDot.style.top = m.p.y * Hc + 'px';
+    magDot.classList.add('on'); magDot.classList.toggle('edge', m.hit === 'edge');
+  }
+  let eg = null;
+  const ptH = e => { const r = frame.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.height, y: (e.clientY - r.top) / r.height, H: r.height }; };
+  layer.querySelectorAll('.tend').forEach(el => {
+    const k = el.classList.contains('a') ? 0 : 1;
+    el.addEventListener('pointerdown', e => {
+      const L = cur(); if (!isLine(L) || L.locked || isMulti()) return;
+      e.stopPropagation(); e.preventDefault();
+      try { el.setPointerCapture(e.pointerId); } catch { }
+      const ends = lineEnds(L), p = ptH(e);
+      eg = { id: e.pointerId, L, k, fixed: ends[1 - k], off: { x: p.x - ends[k].x, y: p.y - ends[k].y } };
+      frame.classList.add('dragging');
+    });
+    el.addEventListener('pointermove', e => {
+      if (!eg || eg.id !== e.pointerId) return;
+      e.stopPropagation();
+      const { L, fixed } = eg, raw = ptH(e);
+      let P = { x: raw.x - eg.off.x, y: raw.y - eg.off.y }, m = null;
+      if (e.shiftKey) {   // recta, vertical o a 45°
+        const len = Math.hypot(P.x - fixed.x, P.y - fixed.y), an = Math.round(Math.atan2(P.y - fixed.y, P.x - fixed.x) / (Math.PI / 4)) * (Math.PI / 4);
+        P = { x: fixed.x + Math.cos(an) * len, y: fixed.y + Math.sin(an) * len };
+      } else if (!e.altKey) { m = magnet(P, L, raw.H); P = m.p; }
+      showMag(m);
+      const a = eg.k === 0 ? P : fixed, b = eg.k === 0 ? fixed : P;
+      L.size = Math.max(0.002, Math.hypot(b.x - a.x, b.y - a.y));
+      L.rot = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+      L.x = (a.x + b.x) / 2 / ASPECT; L.y = (a.y + b.y) / 2;
+      changed(); syncPanelValues();
+    });
+    const end = e => { if (eg && eg.id === e.pointerId) { eg = null; frame.classList.remove('dragging'); showMag(null); } };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+  });
+
   // rueda / trackpad: si hay un texto elegido, agranda el texto en vez de la foto
   function wheel(e) {
     const L = cur(); if (!L || L.locked || isMulti()) return false;
@@ -801,7 +897,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     <div class="tp-sec img-only" id="tTint"></div>
     <div class="tp-sec" id="tShadow"></div>
     <div class="tp-sec no-shape" id="tStroke"></div>
-    <div class="tp-sec shape-only" id="tBorder"></div>
+    <div class="tp-sec shape-only no-line" id="tBorder"></div>
     <div class="tp-sec" id="tBg"></div>
     <div class="tp-field"><span>Estilos guardados</span>
       <div class="styles" id="tStyles"></div>
@@ -971,21 +1067,29 @@ window.createMosaicoText = function createMosaicoText(A) {
   // Formas: ancho y alto propios (en % de la publicación), forma y redondeo
   {
     const el = $('#tShape');
-    el.innerHTML = `<div class="tp-row"><span>Forma</span><div class="seg" id="tShapeKind"><button data-v="rect">▭ Rectángulo</button><button data-v="ellipse">◯ Círculo</button></div></div>
-      <div class="row"><button class="chip" id="tShapeSquare" title="Mismo ancho que alto">Ancho = alto</button></div>`;
+    el.innerHTML = `<div class="tp-row line-only"><span>Puntas</span><div class="seg" id="tLineCap"><button data-v="round">Redondeadas</button><button data-v="butt">Rectas</button></div></div>
+      <div class="tp-row no-line"><span>Forma</span><div class="seg" id="tShapeKind"><button data-v="rect">▭ Rectángulo</button><button data-v="ellipse">◯ Círculo</button></div></div>
+      <div class="row no-line"><button class="chip" id="tShapeSquare" title="Mismo ancho que alto">Ancho = alto</button></div>`;
+    const cap = el.querySelector('#tLineCap');
+    cap.addEventListener('click', e => { const b = e.target.closest('[data-v]'), L = cur(); if (!b || !L) return; L.cap = b.dataset.v; changed(); syncPanel(); });
     const kind = el.querySelector('#tShapeKind'), sq = el.querySelector('#tShapeSquare');
     kind.addEventListener('click', e => { const b = e.target.closest('[data-v]'), L = cur(); if (!b || !L) return; L.shape = b.dataset.v; changed(); syncPanel(); renderLayers(); });
     sq.addEventListener('click', () => { const L = cur(); if (!L) return; const wv = L.size * (L.ar || 1); L.size = Math.sqrt(L.size * wv); L.ar = 1; changed(); syncPanel(); });
     refreshers.push(L => {
+      el.closest('#textPanel').classList.toggle('is-line', isLine(L));
       if (!isShape(L)) return;
+      cap.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === (L.cap === 'butt' ? 'butt' : 'round')));
       kind.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === (L.shape || 'rect')));
       el.closest('#textPanel').classList.toggle('is-ellipse', L.shape === 'ellipse');
     });
   }
   const pctW = v => (v / 10).toFixed(1) + '%';
-  slider($('#tSizeRot'), { label: 'Ancho', min: 10, max: 2000, get: L => Math.round((L.size || 0) * (L.ar || 1) / ASPECT * 1000), set: (L, v) => { const h = L.size || 0.25; L.ar = Math.max(0.005, (v / 1000) * ASPECT / h); }, fmt: pctW, cls: 'shape-only' });
-  slider($('#tSizeRot'), { label: 'Alto', min: 10, max: 2000, get: L => Math.round((L.size || 0) * 1000), set: (L, v) => { const wv = (L.size || 0.25) * (L.ar || 1); L.size = Math.max(0.001, v / 1000); L.ar = wv / L.size; }, fmt: pctW, cls: 'shape-only' });
-  slider($('#tSizeRot'), { label: 'Redondear bordes', min: 0, max: 100, get: L => Math.round((L.radius || 0) * 100), set: (L, v) => { L.radius = v / 100; if (!v) delete L.radius; }, fmt: pct, cls: 'shape-only rect-only' });
+  slider($('#tSizeRot'), { label: 'Ancho', min: 10, max: 2000, get: L => Math.round((L.size || 0) * (L.ar || 1) / ASPECT * 1000), set: (L, v) => { const h = L.size || 0.25; L.ar = Math.max(0.005, (v / 1000) * ASPECT / h); }, fmt: pctW, cls: 'shape-only no-line' });
+  slider($('#tSizeRot'), { label: 'Alto', min: 10, max: 2000, get: L => Math.round((L.size || 0) * 1000), set: (L, v) => { const wv = (L.size || 0.25) * (L.ar || 1); L.size = Math.max(0.001, v / 1000); L.ar = wv / L.size; }, fmt: pctW, cls: 'shape-only no-line' });
+  slider($('#tSizeRot'), { label: 'Largo', min: 5, max: 2000, get: L => Math.round((L.size || 0) * 1000), set: (L, v) => { L.size = v / 1000; }, fmt: pctW, cls: 'shape-only line-only' });
+  const thPx = v => { const px = v / 2000 * 1080 / ASPECT; return (px < 10 ? px.toFixed(1) : Math.round(px)) + ' px'; };
+  slider($('#tSizeRot'), { label: 'Grosor', min: 1, max: 160, get: L => Math.round((L.th || 0.006) * 2000), set: (L, v) => { L.th = v / 2000; }, fmt: thPx, cls: 'shape-only line-only' });
+  slider($('#tSizeRot'), { label: 'Redondear bordes', min: 0, max: 100, get: L => Math.round((L.radius || 0) * 100), set: (L, v) => { L.radius = v / 100; if (!v) delete L.radius; }, fmt: pct, cls: 'shape-only rect-only no-line' });
   // Recorte de imágenes: lo que queda no se mueve ni cambia de tamaño en la pantalla; sólo se va el borde.
   const cropSet = side => (L, v) => {
     const fw = L.size * (L.ar || 1) * (L.sx || 1), fh = L.size * (L.sy || 1);
@@ -1128,13 +1232,13 @@ window.createMosaicoText = function createMosaicoText(A) {
   function renderSwatches() {
     const L = cur(), clear = isShape(L) && L.fill === false, now = L && !clear ? (L.color || '#ffffff').toLowerCase() : '';
     const list = [...new Set([...BASE_COLORS, ...lib.palette.map(c => c.toLowerCase())])];
-    colorsEl.innerHTML = (isShape(L) ? `<button class="sw none${clear ? ' on' : ''}" data-none="1" title="Sin color (transparente)"></button>` : '') + list.map(c => `<button class="sw${c === now ? ' on' : ''}" data-c="${c}" style="--c:${c}" title="${c}"></button>`).join('')
+    colorsEl.innerHTML = (isShape(L) && !isLine(L) ? `<button class="sw none${clear ? ' on' : ''}" data-none="1" title="Sin color (transparente)"></button>` : '') + list.map(c => `<button class="sw${c === now ? ' on' : ''}" data-c="${c}" style="--c:${c}" title="${c}"></button>`).join('')
       + `<button class="sw pick" title="Elegir otro color (arrastrá para ver en vivo)"></button>`;
   }
   let pickAdded = null;   // color agregado a la paleta en esta apertura del selector (se reemplaza, no se acumula)
   const textPicker = makePicker({
     get: L => L.color || '#ffffff',
-    set: (L, c) => { L.color = c; if (isShape(L)) { lastShapeColor = c; L.fill = true; } },
+    set: (L, c) => { L.color = c; if (isShape(L)) { lastShapeColor = c; if (!isLine(L)) L.fill = true; } },
     onOpen: () => { pickAdded = null; },
     commit: c => {   // al soltar, el color queda en la paleta compartida
       c = c.toLowerCase();
@@ -1151,7 +1255,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       if (L.fill !== false) { L.fill = false; L.bv = 1; if (!(L.stroke && L.stroke.on)) L.stroke = { ...clone(DEFAULT.stroke), ...(L.stroke || {}), color: L.color || '#000000', on: true }; }
       changed(); syncPanel(); return;
     }
-    if (isShape(L)) L.fill = true;
+    if (isShape(L) && !isLine(L)) L.fill = true;
     L.color = b.dataset.c; changed(); renderSwatches(); textPicker.refresh();
   });
   refreshers.push(() => renderSwatches());
@@ -1221,8 +1325,9 @@ window.createMosaicoText = function createMosaicoText(A) {
     grip: '<svg viewBox="0 0 20 20"><path d="M7 5h.01M13 5h.01M7 10h.01M13 10h.01M7 15h.01M13 15h.01"/></svg>',
     rect: '<svg viewBox="0 0 20 20"><rect x="3.5" y="5" width="13" height="10" rx="2"/></svg>',
     ellipse: '<svg viewBox="0 0 20 20"><ellipse cx="10" cy="10" rx="7" ry="6"/></svg>',
+    line: '<svg viewBox="0 0 20 20"><path d="M4 16L16 4"/></svg>',
   };
-  const layerName = L => L.name || (isImg(L) ? 'Imagen' : isShape(L) ? (L.shape === 'ellipse' ? 'Círculo' : 'Rectángulo') : (L.text || '').split('\n')[0].trim().slice(0, 32) || 'Texto');
+  const layerName = L => L.name || (isImg(L) ? 'Imagen' : isShape(L) ? (L.shape === 'ellipse' ? 'Círculo' : L.shape === 'line' ? 'Línea' : 'Rectángulo') : (L.text || '').split('\n')[0].trim().slice(0, 32) || 'Texto');
   let layerClip = (() => { try { return JSON.parse(localStorage.getItem('mosaico.layerClip')); } catch { return null; } })();
   function copyLayer(L) {
     if (!L) return;
@@ -1256,7 +1361,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       <div class="lp-row${L.id === sel || multi.has(L.id) ? ' on' : ''}${L.hidden ? ' hid' : ''}" data-id="${L.id}">
         <span class="lp-grip" title="Arrastrá para cambiar el orden">${IC.grip}</span>
         <button class="lp-ic" data-l="eye" title="${L.hidden ? 'Mostrar' : 'Ocultar'}">${L.hidden ? IC.eyeOff : IC.eye}</button>
-        <button class="lp-name" data-l="sel" title="Tocá para elegirla · doble toque para renombrar"><span class="lp-type">${isImg(L) ? IC.img : isShape(L) ? (L.shape === 'ellipse' ? IC.ellipse : IC.rect) : 'T'}</span>${escHtml(layerName(L))}</button>
+        <button class="lp-name" data-l="sel" title="Tocá para elegirla · doble toque para renombrar"><span class="lp-type">${isImg(L) ? IC.img : isShape(L) ? (L.shape === 'ellipse' ? IC.ellipse : L.shape === 'line' ? IC.line : IC.rect) : 'T'}</span>${escHtml(layerName(L))}</button>
         <button class="lp-ic${L.locked ? ' act' : ''}" data-l="lock" title="${L.locked ? 'Desbloquear' : 'Bloquear (no se mueve sin querer)'}">${L.locked ? IC.lock : IC.unlock}</button>
         <button class="lp-ic" data-l="copy" title="Copiar esta capa">${IC.copy}</button>
       </div>`).join('');
@@ -1267,6 +1372,7 @@ window.createMosaicoText = function createMosaicoText(A) {
           <button class="chip accent" data-l="addtext" id="addTextBtn" title="Agregar un texto">+ Texto</button>
           <button class="chip accent" data-l="addimg" id="addImgBtn" title="Agregar una imagen (PNG, logo, firma…) como capa">+ Imagen</button>
           <button class="chip accent" data-l="addshape" id="addShapeBtn" title="Agregar una forma (rectángulo o círculo)">+ Forma</button>
+          <button class="chip accent" data-l="addline" id="addLineBtn" title="Agregar una línea recta">+ Línea</button>
           ${ts.length > 1 ? `<button class="chip${pickMany ? ' act' : ''}" data-l="many" title="Elegir varias capas para moverlas o alinearlas juntas (en la computadora: Mayúscula o ⌘ + clic)">${pickMany ? 'Listo' : 'Elegir varias'}</button>` : ''}
           ${layerClip ? `<button class="chip" data-l="paste" title="Pegar la capa copiada">Pegar capa</button><button class="chip" data-l="pastemany" title="Pegar la capa copiada en varias publicaciones">Pegar en…</button>` : ''}
         </div></div>
@@ -1296,6 +1402,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (act === 'addtext') return add();
     if (act === 'addimg') return imgInput.click();
     if (act === 'addshape') return addShape('rect');
+    if (act === 'addline') return addShape('line');
     if (act === 'paste') return pasteLayer();
     if (act === 'pastemany') return A.startSelect('layer');
     if (act === 'bg') return deselect();
