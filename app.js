@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.6.6';
+  const VERSION = 'v1.6.7';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1599,6 +1599,25 @@
     }
   }
   $('#trashBtn').addEventListener('click', openTrash);
+  // publicación rescatada en un archivo .json (los datos de una publicación tal como los guarda la app)
+  const rescueInput = document.createElement('input');
+  rescueInput.type = 'file'; rescueInput.accept = '.json,application/json'; rescueInput.hidden = true;
+  document.body.append(rescueInput);
+  $('#trashFileBtn').addEventListener('click', () => rescueInput.click());
+  rescueInput.addEventListener('change', async () => {
+    const f = rescueInput.files[0]; rescueInput.value = '';
+    if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      const list = (Array.isArray(data) ? data : [data]).filter(o => o && typeof o === 'object' && Array.isArray(o.texts));
+      if (!list.length) throw new Error('el archivo no tiene una publicación');
+      trashSheet.hidden = true;
+      for (const o of list) {
+        const { sync, mosaicoRescate, ...m } = o;
+        await restoreEntry({ id: m.id || uid(), at: Date.now(), meta: m, where: { index: 0 } });
+      }
+    } catch (e) { console.error(e); toast('No se pudo leer el archivo: ' + (e.message || e), false, 8000); }
+  });
   trashSheet.addEventListener('click', e => { if (e.target === trashSheet || e.target.closest('[data-close]')) trashSheet.hidden = true; });
 
   // ---- duplicar una publicación entera (si es carrusel, con todas sus diapositivas) ----
