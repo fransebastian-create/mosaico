@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.6.3';
+  const VERSION = 'v1.6.4';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1433,6 +1433,58 @@
     saveOrder();
   }
 
+  // ---- duplicar una publicación entera (si es carrusel, con todas sus diapositivas) ----
+  let dupBusy = false;
+  async function duplicatePost(src, after) {
+    if (!src || dupBusy) return;
+    dupBusy = true;
+    try {
+      const lead = leaderOf(src), list = slidesOf(lead), copies = [];
+      toast(list.length > 1 ? `Duplicando el carrusel (${list.length})…` : 'Duplicando…', true);
+      for (const x of list) {
+        const id = uid();
+        const it = structuredClone({ ...meta(x), id, sync: null });
+        delete it.parent; delete it.slides;
+        it.texts = (it.texts || []).map(L => ({ ...L, id: uid() }));   // las imágenes de las capas se comparten (no se borran nunca)
+        const kind = x.kind || 'image';
+        if (kind !== 'blank') {
+          const rec = await DB.get('blobs', x.id);
+          const orig = rec && rec.orig ? rec.orig : await getOrigBlob(x);
+          await DB.put('blobs', { id, orig, thumb: rec && rec.thumb ? rec.thumb : orig });
+          if (kind === 'video') {
+            const v = await getVideoBlob(x);
+            if (!v) throw new Error('falta el video');
+            await DB.put('videos', { id, video: v });
+          }
+        }
+        it.thumb = x.thumb || (kind === 'blank' ? solidImage(it.bg) : null);
+        await DB.put('items', meta(it));
+        S.items.set(id, it); copies.push(it);
+      }
+      const at = S.order.indexOf(leaderOf(after && S.items.has(after.id) ? after : lead).id);
+      S.order.splice(at + 1, 0, copies[0].id);
+      if (copies.length > 1) setSlides(copies.map(x => x.id), copies[0].id);
+      copies.forEach(saveItem);
+      saveOrder(); renderGrid();
+      const k = list.indexOf(src);
+      await openEditor(copies[Math.max(0, k)].id);
+      toast(copies.length > 1 ? `Carrusel duplicado (${copies.length} diapositivas)` : 'Publicación duplicada');
+    } catch (e) { console.error(e); toast('No se pudo duplicar: ' + (e.message || e), false, 7000); }
+    finally { dupBusy = false; }
+  }
+  $('#dupBtn').addEventListener('click', () => duplicatePost(S.current));
+  function copyPost() {
+    if (!S.current) return;
+    S.postClip = leaderOf(S.current).id; S.lastCopied = 'post';
+    const n = slidesOf(leaderOf(S.current)).length;
+    toast(n > 1 ? `Carrusel copiado: Ctrl+V lo pega al lado` : 'Publicación copiada: Ctrl+V la pega al lado');
+  }
+  function pastePost() {
+    const src = S.items.get(S.postClip);
+    if (!src) { toast('La publicación copiada ya no está'); return; }
+    duplicatePost(src, S.current);   // queda al lado de la publicación abierta
+  }
+
   // ---- tira del carrusel (en el editor) ----
   const stripEl = $('#slideStrip');
   let stripSortable = null;
@@ -1607,7 +1659,9 @@
     const tag = (e.target.tagName || '').toLowerCase();
     if ((tag === 'input' && e.target.type !== 'range') || tag === 'textarea' || tag === 'select') return;
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyAdj(); e.preventDefault(); }
+    if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyPost(); e.preventDefault(); }
+    else if (mod && e.key.toLowerCase() === 'd') { duplicatePost(S.current); e.preventDefault(); }
+    else if (mod && e.key.toLowerCase() === 'v' && S.lastCopied === 'post' && S.postClip) { pastePost(); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'v' && S.lastCopied === 'layer' && T.hasLayerClip()) { T.pasteLayer(); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'v' && S.clip) { pasteAdj(); e.preventDefault(); }
     else if (e.key === 'Escape' && S.selecting) endSelect();
