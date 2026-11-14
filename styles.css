@@ -578,6 +578,16 @@ body.has-banner { --bh: 44px; }
 .tside.r { right: -6px; top: 50%; width: 10px; height: 26px; margin-top: -13px; border-radius: 5px; cursor: ew-resize; }
 .tside.b { bottom: -6px; left: 50%; width: 26px; height: 10px; margin-left: -13px; border-radius: 5px; cursor: ns-resize; }
 .trad { width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #ffd34d; cursor: nwse-resize; }
+.tcorner { display: none; position: absolute; width: 12px; height: 12px; pointer-events: auto; touch-action: none; background: #fff; border: 1.5px solid #1c1b1a; border-radius: 2px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+.tbox.shape:not(.multi):not(.locked) .tcorner { display: block; }
+.tcorner.tl { left: -7px; top: -7px; cursor: nwse-resize; } .tcorner.br { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.tcorner.tr { right: -7px; top: -7px; cursor: nesw-resize; } .tcorner.bl { left: -7px; bottom: -7px; cursor: nesw-resize; }
+/* formas: el tirador de girar va arriba al centro, las esquinas quedan para agrandar */
+.tbox.shape .thandle { right: auto; bottom: auto; left: 50%; top: -34px; margin-left: -11px; cursor: grab; }
+.tbox.shape:not(.multi):not(.locked)::before { content: ""; position: absolute; left: 50%; top: -12px; height: 12px; border-left: 1.5px solid rgba(255,255,255,.9); }
+.sw.none { background: repeating-conic-gradient(#d8d8d8 0 25%, #fff 0 50%) 0 0 / 10px 10px; position: relative; overflow: hidden; }
+.sw.none::after { content: ""; position: absolute; left: 50%; top: -20%; height: 140%; border-left: 2px solid #e3574a; transform: rotate(45deg); }
+@media (pointer: coarse) { .tcorner { width: 18px; height: 18px; } .tcorner.tl, .tcorner.tr { top: -10px; } .tcorner.bl, .tcorner.br { bottom: -10px; } .tcorner.tl, .tcorner.bl { left: -10px; } .tcorner.tr, .tcorner.br { right: -10px; } .tbox.shape .thandle { top: -44px; margin-left: -15px; } .tbox.shape:not(.multi):not(.locked)::before { top: -16px; height: 16px; } }
 @media (pointer: coarse) { .tside.r { width: 14px; height: 34px; margin-top: -17px; right: -8px; } .tside.b { width: 34px; height: 14px; margin-left: -17px; bottom: -8px; } .trad { width: 18px; height: 18px; margin: -9px 0 0 -9px; } }
 
 /* aviso de versión nueva */

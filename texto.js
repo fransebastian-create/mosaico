@@ -278,12 +278,13 @@ window.createMosaicoText = function createMosaicoText(A) {
     ctx.globalCompositeOperation = BLENDS[L.blend] ? L.blend : 'source-over';
     setShadow(ctx, L, Math.min(w, h) * 0.35);
     shapePath(ctx, L, w, h);
+    if (L.fill === false && !L.bv) { L.stroke = { ...clone(DEFAULT.stroke), ...(L.stroke || {}), color: L.color || '#000000' }; L.bv = 1; }   // formas de antes: sin relleno usaban el color de la forma para el borde
     if (L.fill !== false) { ctx.fillStyle = L.color || '#ffffff'; ctx.fill(); }
     const st = L.stroke;
     if (st && st.on) {
       if (L.fill !== false) ctx.shadowColor = 'transparent';
       ctx.lineWidth = Math.max(1, (st.width ?? 0.3) * 0.1 * Math.min(w, h));
-      ctx.strokeStyle = L.fill === false ? (L.color || '#000000') : (st.color || '#000000'); ctx.lineJoin = 'round';   // sin relleno: el color elegido es el del borde
+      ctx.strokeStyle = st.color || '#000000'; ctx.lineJoin = 'round';
       ctx.stroke();
     }
     ctx.restore();
@@ -291,7 +292,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   function addShape(shape = 'rect') {
     const it = S.current; if (!it) return;
     it.texts = it.texts || [];
-    const L = { id: uid(), type: 'shape', shape, x: 0.5, y: 0.5, rot: 0, size: 0.25, ar: shape === 'ellipse' ? 1 : 1, radius: 0, color: lastShapeColor, opacity: 1, fill: true };
+    const L = { id: uid(), type: 'shape', shape, x: 0.5, y: 0.5, rot: 0, size: 0.25, ar: shape === 'ellipse' ? 1 : 1, radius: 0, color: lastShapeColor, opacity: 1, fill: true, bv: 1 };
     while (it.texts.some(o => Math.abs(o.x - L.x) < 0.01 && Math.abs(o.y - L.y) < 0.01)) L.y = Math.min(0.9, L.y + 0.08);
     it.texts.push(L);
     select(L.id); changed();
@@ -482,7 +483,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   // ---- recuadro de selección y guías ----
   const layer = document.createElement('div'); layer.className = 'tlayer';
-  layer.innerHTML = '<div class="tsnap v"></div><div class="tsnap h"></div><div class="tbox" hidden><div class="thandle" title="Arrastrá para agrandar y girar"></div><div class="tside r" title="Arrastrá para cambiar el ancho"></div><div class="tside b" title="Arrastrá para cambiar el alto"></div><div class="trad" title="Arrastrá hacia adentro para redondear los bordes"></div></div>';
+  layer.innerHTML = '<div class="tsnap v"></div><div class="tsnap h"></div><div class="tbox" hidden><div class="thandle" title="Arrastrá para agrandar y girar"></div><div class="tside r" title="Arrastrá para cambiar el ancho"></div><div class="tside b" title="Arrastrá para cambiar el alto"></div><div class="trad" title="Arrastrá hacia adentro para redondear los bordes"></div><div class="tcorner tl"></div><div class="tcorner tr"></div><div class="tcorner bl"></div><div class="tcorner br"></div></div>';
   frame.append(layer);
   const box = layer.querySelector('.tbox'), handle = layer.querySelector('.thandle');
   const sideR = layer.querySelector('.tside.r'), sideB = layer.querySelector('.tside.b'), radH = layer.querySelector('.trad');
@@ -507,7 +508,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!L || !L._box) { box.hidden = true; return; }
     placeBox(box, L);
     box.classList.toggle('multi', isMulti());
-    box.classList.toggle('shape', isShape(L)); box.classList.toggle('ellipse', isShape(L) && L.shape === 'ellipse');
+    box.classList.toggle('shape', isShape(L)); box.classList.toggle('ellipse', isShape(L) && L.shape === 'ellipse'); handle.title = isShape(L) ? 'Arrastrá para girar' : 'Arrastrá para agrandar y girar';
     if (isShape(L)) {   // tirador de redondeo: más adentro cuanto más redondeado
       const Hc = frame.clientHeight, w = L.size * (L.ar || 1) * Hc, h = L.size * Hc;
       const m = 12 + (L.radius || 0) * Math.min(w, h) * 0.35;
@@ -636,7 +637,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!hg || hg.id !== e.pointerId) return;
     e.stopPropagation();
     const d = Math.hypot(e.clientX - hg.cx, e.clientY - hg.cy), a = Math.atan2(e.clientY - hg.cy, e.clientX - hg.cx) * 180 / Math.PI;
-    hg.L.size = clamp(hg.size0 * d / hg.d0, 0.012, maxSize(hg.L));
+    if (!isShape(hg.L)) hg.L.size = clamp(hg.size0 * d / hg.d0, 0.012, maxSize(hg.L));   // en las formas sólo gira (las esquinas agrandan)
     hg.L.rot = snapRot(normRot(hg.rot0 + normRot(a - hg.a0)));
     changed(); syncPanelValues();
   });
@@ -645,9 +646,9 @@ window.createMosaicoText = function createMosaicoText(A) {
   handle.addEventListener('pointercancel', endHandle);
   // formas: tiradores de los costados (ancho / alto, el lado opuesto queda quieto) y de redondeo
   let sg = null;
-  const localPt = (L, e) => {   // punto del puntero en coordenadas de la forma (px, sin giro, desde el centro)
+  const localPt = (L, e, x = L.x, y = L.y) => {   // punto del puntero en coordenadas de la forma (px, sin giro, desde el centro al empezar)
     const rect = frame.getBoundingClientRect();
-    const cx = rect.left + L.x * rect.width, cy = rect.top + L.y * rect.height, a = -rad(L.rot || 0);
+    const cx = rect.left + x * rect.width, cy = rect.top + y * rect.height, a = -rad(L.rot || 0);
     const dx = e.clientX - cx, dy = e.clientY - cy;
     return { x: dx * Math.cos(a) - dy * Math.sin(a), y: dx * Math.sin(a) + dy * Math.cos(a), H: rect.height };
   };
@@ -661,8 +662,18 @@ window.createMosaicoText = function createMosaicoText(A) {
   function sideMove(e) {
     if (!sg || sg.id !== e.pointerId) return;
     e.stopPropagation();
-    const { L } = sg, p = localPt(L, e), H = p.H, a = rad(L.rot || 0);
-    if (sg.kind === 'rad') {
+    const { L } = sg, p = sg.kind === 'rad' ? localPt(L, e) : localPt(L, e, sg.x0, sg.y0), H = p.H, a = rad(L.rot || 0);
+    if (sg.kind.length === 2) {   // esquina: la opuesta queda quieta
+      const sx = sg.kind[1] === 'r' ? 1 : -1, sy = sg.kind[0] === 'b' ? 1 : -1;
+      const w0 = sg.size0 * sg.ar0, h0 = sg.size0;
+      const ox = -sx * w0 / 2, oy = -sy * h0 / 2;   // esquina opuesta (unidades del alto, desde el centro inicial)
+      const cx = sx * w0 / 2 + (p.x - sg.p0.x) / H, cy = sy * h0 / 2 + (p.y - sg.p0.y) / H;
+      let w = Math.max(0.005, sx * (cx - ox)), h = Math.max(0.005, sy * (cy - oy));
+      if (e.shiftKey) { const k = Math.max(w / w0, h / h0); w = w0 * k; h = h0 * k; }
+      L.size = h; L.ar = w / h;
+      const lx = ox + sx * w / 2, ly = oy + sy * h / 2;   // nuevo centro, sin giro
+      L.x = sg.x0 + (lx * Math.cos(a) - ly * Math.sin(a)) / ASPECT; L.y = sg.y0 + lx * Math.sin(a) + ly * Math.cos(a);
+    } else if (sg.kind === 'rad') {
       const w = L.size * (L.ar || 1) * H, h = L.size * H;
       const m = ((p.x + w / 2) + (p.y + h / 2)) / 2;
       L.radius = clamp((m - 12) / (0.35 * Math.min(w, h)), 0, 1);
@@ -682,7 +693,9 @@ window.createMosaicoText = function createMosaicoText(A) {
     changed(); syncPanelValues();
   }
   const sideEnd = e => { if (sg && sg.id === e.pointerId) { sg = null; frame.classList.remove('dragging'); } };
-  [[sideR, 'r'], [sideB, 'b'], [radH, 'rad']].forEach(([el, k]) => {
+  const CORNER_TIP = 'Arrastrá para agrandar o achicar (con Mayúscula mantiene la proporción)';
+  layer.querySelectorAll('.tcorner').forEach(el => { el.title = CORNER_TIP; });
+  [[sideR, 'r'], [sideB, 'b'], [radH, 'rad'], ...[...layer.querySelectorAll('.tcorner')].map(el => [el, el.classList[1]])].forEach(([el, k]) => {
     el.addEventListener('pointerdown', e => sideStart(k, e));
     el.addEventListener('pointermove', sideMove);
     el.addEventListener('pointerup', sideEnd);
@@ -787,7 +800,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     <div class="tp-sec img-only" id="tImgAdj"></div>
     <div class="tp-sec img-only" id="tTint"></div>
     <div class="tp-sec" id="tShadow"></div>
-    <div class="tp-sec" id="tStroke"></div>
+    <div class="tp-sec no-shape" id="tStroke"></div>
+    <div class="tp-sec shape-only" id="tBorder"></div>
     <div class="tp-sec" id="tBg"></div>
     <div class="tp-field"><span>Estilos guardados</span>
       <div class="styles" id="tStyles"></div>
@@ -958,15 +972,13 @@ window.createMosaicoText = function createMosaicoText(A) {
   {
     const el = $('#tShape');
     el.innerHTML = `<div class="tp-row"><span>Forma</span><div class="seg" id="tShapeKind"><button data-v="rect">▭ Rectángulo</button><button data-v="ellipse">◯ Círculo</button></div></div>
-      <div class="row"><button class="chip" id="tShapeFill">Sin relleno</button><button class="chip" id="tShapeSquare" title="Mismo ancho que alto">Ancho = alto</button></div>`;
-    const kind = el.querySelector('#tShapeKind'), fill = el.querySelector('#tShapeFill'), sq = el.querySelector('#tShapeSquare');
+      <div class="row"><button class="chip" id="tShapeSquare" title="Mismo ancho que alto">Ancho = alto</button></div>`;
+    const kind = el.querySelector('#tShapeKind'), sq = el.querySelector('#tShapeSquare');
     kind.addEventListener('click', e => { const b = e.target.closest('[data-v]'), L = cur(); if (!b || !L) return; L.shape = b.dataset.v; changed(); syncPanel(); renderLayers(); });
-    fill.addEventListener('click', () => { const L = cur(); if (!L) return; L.fill = L.fill === false; if (L.fill === false && !(L.stroke && L.stroke.on)) L.stroke = { ...clone(DEFAULT.stroke), ...(L.stroke || {}), on: true }; changed(); syncPanel(); });
     sq.addEventListener('click', () => { const L = cur(); if (!L) return; const wv = L.size * (L.ar || 1); L.size = Math.sqrt(L.size * wv); L.ar = 1; changed(); syncPanel(); });
     refreshers.push(L => {
       if (!isShape(L)) return;
       kind.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === (L.shape || 'rect')));
-      fill.classList.toggle('on', L.fill === false);
       el.closest('#textPanel').classList.toggle('is-ellipse', L.shape === 'ellipse');
     });
   }
@@ -1019,6 +1031,13 @@ window.createMosaicoText = function createMosaicoText(A) {
       const s = sub.bind(null, 'stroke');
       slider(b, { label: 'Grosor', min: 2, max: 100, ...wrap(s('width', 0.3), 100), fmt: pct });
       colorInput(b, { label: 'Color del contorno', ...s('color', '#000000') });
+    },
+  });
+  section($('#tBorder'), {
+    label: 'Borde', key: 'stroke', build: b => {
+      const s = sub.bind(null, 'stroke');
+      slider(b, { label: 'Ancho del borde', min: 2, max: 100, ...wrap(s('width', 0.3), 100), fmt: pct });
+      colorInput(b, { label: 'Color del borde', ...s('color', '#000000') });
     },
   });
   section($('#tBg'), {
@@ -1107,15 +1126,15 @@ window.createMosaicoText = function createMosaicoText(A) {
   const BASE_COLORS = ['#ffffff', '#000000', '#f3ede2', '#2b2a28'];
   const colorsEl = $('#tColors');
   function renderSwatches() {
-    const L = cur(), now = L ? (L.color || '#ffffff').toLowerCase() : '';
+    const L = cur(), clear = isShape(L) && L.fill === false, now = L && !clear ? (L.color || '#ffffff').toLowerCase() : '';
     const list = [...new Set([...BASE_COLORS, ...lib.palette.map(c => c.toLowerCase())])];
-    colorsEl.innerHTML = list.map(c => `<button class="sw${c === now ? ' on' : ''}" data-c="${c}" style="--c:${c}" title="${c}"></button>`).join('')
+    colorsEl.innerHTML = (isShape(L) ? `<button class="sw none${clear ? ' on' : ''}" data-none="1" title="Sin color (transparente)"></button>` : '') + list.map(c => `<button class="sw${c === now ? ' on' : ''}" data-c="${c}" style="--c:${c}" title="${c}"></button>`).join('')
       + `<button class="sw pick" title="Elegir otro color (arrastrá para ver en vivo)"></button>`;
   }
   let pickAdded = null;   // color agregado a la paleta en esta apertura del selector (se reemplaza, no se acumula)
   const textPicker = makePicker({
     get: L => L.color || '#ffffff',
-    set: (L, c) => { L.color = c; if (isShape(L)) lastShapeColor = c; },
+    set: (L, c) => { L.color = c; if (isShape(L)) { lastShapeColor = c; L.fill = true; } },
     onOpen: () => { pickAdded = null; },
     commit: c => {   // al soltar, el color queda en la paleta compartida
       c = c.toLowerCase();
@@ -1128,6 +1147,11 @@ window.createMosaicoText = function createMosaicoText(A) {
   colorsEl.addEventListener('click', e => {
     const b = e.target.closest('button.sw'); const L = cur(); if (!b || !L) return;
     if (b.classList.contains('pick')) { textPicker.toggle(); return; }
+    if (b.dataset.none) {   // forma sin relleno: si no tiene borde, se lo prende con el color que tenía para que no desaparezca
+      if (L.fill !== false) { L.fill = false; L.bv = 1; if (!(L.stroke && L.stroke.on)) L.stroke = { ...clone(DEFAULT.stroke), ...(L.stroke || {}), color: L.color || '#000000', on: true }; }
+      changed(); syncPanel(); return;
+    }
+    if (isShape(L)) L.fill = true;
     L.color = b.dataset.c; changed(); renderSwatches(); textPicker.refresh();
   });
   refreshers.push(() => renderSwatches());
