@@ -158,10 +158,12 @@ window.createMosaicoText = function createMosaicoText(A) {
     const W = H * ASPECT;
     const m = layout(ctx, L, H);
     ensureFont(m.f);
-    L._box = { w: m.maxW / H, h: m.h / H };
+    const sx = L.sx || 1, sy = L.sy || 1;   // ancho y alto: estirar o comprimir la letra
+    L._box = { w: m.maxW * sx / H, h: m.h * sy / H };
     ctx.save();
     ctx.translate(x0 + L.x * W, L.y * H);
     ctx.rotate(rad(L.rot || 0));
+    if (sx !== 1 || sy !== 1) ctx.scale(sx, sy);
     ctx.globalAlpha = clamp(L.opacity ?? 1, 0, 1);
     ctx.globalCompositeOperation = BLENDS[L.blend] ? L.blend : 'source-over';
     ctx.textBaseline = 'middle';
@@ -174,7 +176,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       ctx.beginPath();
       if (ctx.roundRect) ctx.roundRect(-bw / 2, -bh / 2, bw, bh, r); else ctx.rect(-bw / 2, -bh / 2, bw, bh);
       ctx.fill();
-      L._box = { w: bw / H, h: bh / H };
+      L._box = { w: bw * sx / H, h: bh * sy / H };
     }
     setShadow(ctx, L, m.fontPx);
     if (L.stroke && L.stroke.on) {
@@ -253,8 +255,8 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   function drawImageLayer(ctx, L, x0, H) {
     const W = H * ASPECT, e = imageOf(L);
-    const ar = L.ar || (e.w ? e.w / e.h : 1), h = L.size * H, w = h * ar;
-    L._box = { w: w / H, h: L.size };
+    const ar = L.ar || (e.w ? e.w / e.h : 1), h = L.size * H * (L.sy || 1), w = L.size * H * ar * (L.sx || 1);
+    L._box = { w: w / H, h: h / H };
     if (L.hidden || e.state !== 'ok') return;
     ctx.save();
     ctx.translate(x0 + L.x * W, L.y * H);
@@ -306,7 +308,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     const x0 = (ow - oh * ASPECT) / 2;
     for (const L of it.texts) {
       if (L.type === 'image') { drawImageLayer(ctx, L, x0, oh); continue; }
-      if (L.hidden) { if (!L._box) { const m = layout(ctx, L, oh); L._box = { w: m.maxW / oh, h: m.h / oh }; } continue; }
+      if (L.hidden) { if (!L._box) { const m = layout(ctx, L, oh); L._box = { w: m.maxW * (L.sx || 1) / oh, h: m.h * (L.sy || 1) / oh }; } continue; }
       drawText(ctx, L, x0, oh);
     }
     ctx.restore();
@@ -730,6 +732,10 @@ window.createMosaicoText = function createMosaicoText(A) {
   slider($('#tSizeRot'), { label: 'Tamaño', min: 0, max: 1000, get: L => posFromSz(L.size * 1000), set: (L, v) => { L.size = szFromPos(v) / 1000; }, fmt: v => (szFromPos(v) / 10).toFixed(1), cls: 'txt-only' });
   const IZ0 = 12, IZ1 = 3000, izFromPos = p => IZ0 + (IZ1 - IZ0) * (p / 1000) ** 2, posFromIz = z => Math.round(Math.sqrt(clamp((z - IZ0) / (IZ1 - IZ0), 0, 1)) * 1000);
   slider($('#tSizeRot'), { label: 'Tamaño', min: 0, max: 1000, get: L => posFromIz(L.size * 1000), set: (L, v) => { L.size = izFromPos(v) / 1000; }, fmt: v => Math.round(izFromPos(v) / 10) + '%', cls: 'img-only' });
+  // Ancho / Alto: de 50% a 150%, de a 0,1%
+  const pctScale = v => (v / 10).toFixed(1) + '%';
+  slider($('#tSizeRot'), { label: 'Ancho', min: 500, max: 1500, get: L => Math.round((L.sx || 1) * 1000), set: (L, v) => { L.sx = v / 1000; if (v === 1000) delete L.sx; }, fmt: pctScale });
+  slider($('#tSizeRot'), { label: 'Alto', min: 500, max: 1500, get: L => Math.round((L.sy || 1) * 1000), set: (L, v) => { L.sy = v / 1000; if (v === 1000) delete L.sy; }, fmt: pctScale });
   slider($('#tSizeRot'), { label: 'Giro', min: -180, max: 180, step: 0.5, get: L => L.rot || 0, set: (L, v) => { L.rot = snapRot(v); }, fmt: v => (Math.abs(v) < 0.05 ? '0' : v > 0 ? '+' + v : v) + '°' });
   slider($('#tLook'), { label: 'Grosor', min: -100, max: 100, get: L => L.weight || 0, set: (L, v) => { L.weight = v; }, fmt: v => (v > 0 ? '+' : '') + v, cls: 'txt-only' });
   slider($('#tLook'), { label: 'Opacidad', min: 5, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct });
@@ -840,7 +846,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   });
   refreshers.push(() => renderSwatches());
   // estilos guardados
-  const STYLE_KEYS = ['font', 'size', 'weight', 'color', 'opacity', 'align', 'caseMode', 'letter', 'line', 'shadow', 'stroke', 'bg'];
+  const STYLE_KEYS = ['font', 'size', 'sx', 'sy', 'weight', 'color', 'opacity', 'align', 'caseMode', 'letter', 'line', 'shadow', 'stroke', 'bg'];
   const stylesEl = $('#tStyles');
   function renderStyles() {
     stylesEl.innerHTML = lib.styles.length
