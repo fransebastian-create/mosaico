@@ -353,7 +353,15 @@ window.createMosaicoText = function createMosaicoText(A) {
     setShadow(ctx, L, h * 0.35);
     ctx.imageSmoothingQuality = 'high';
     const src = layerFx(L, e) || e.img, sw = src === e.img ? e.w : src.width, shh = src === e.img ? e.h : src.height;
-    if (c.l || c.r || c.t || c.b) ctx.drawImage(src, c.l * sw, c.t * shh, (1 - c.l - c.r) * sw, (1 - c.t - c.b) * shh, -w / 2, -h / 2, w, h);
+    const sx0 = c.l * sw, sy0 = c.t * shh, sw1 = (1 - c.l - c.r) * sw, sh1 = (1 - c.t - c.b) * shh;
+    if (L.cshape === 'ellipse') {   // recorte circular: se recorta en otra hoja y después se pega (así la sombra sigue el círculo)
+      const k = Math.min(1, 2048 / Math.max(w, h)), ow = Math.max(1, Math.round(w * k)), oh = Math.max(1, Math.round(h * k));
+      const oc = document.createElement('canvas'); oc.width = ow; oc.height = oh;
+      const o = oc.getContext('2d'); o.imageSmoothingQuality = 'high';
+      o.beginPath(); o.ellipse(ow / 2, oh / 2, ow / 2, oh / 2, 0, 0, Math.PI * 2); o.clip();
+      o.drawImage(src, sx0, sy0, sw1, sh1, 0, 0, ow, oh);
+      ctx.drawImage(oc, -w / 2, -h / 2, w, h);
+    } else if (c.l || c.r || c.t || c.b) ctx.drawImage(src, sx0, sy0, sw1, sh1, -w / 2, -h / 2, w, h);
     else ctx.drawImage(src, -w / 2, -h / 2, w, h);
     ctx.restore();
   }
@@ -1105,6 +1113,27 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (after[side] > 0) L[k] = after[side]; else delete L[k];
   };
   const pctCrop = v => (v / 10).toFixed(1) + '%';
+  {   // forma del recorte: rectangular o circular
+    const row = document.createElement('div'); row.className = 'tp-row img-only';
+    row.innerHTML = `<span>Recorte</span><div class="seg" id="tCropKind"><button data-v="rect">▭ Rectangular</button><button data-v="ellipse">◯ Circular</button></div>`;
+    $('#tSizeRot').append(row);
+    const seg = row.querySelector('.seg');
+    seg.addEventListener('click', e => {
+      const b = e.target.closest('[data-v]'), L = cur(); if (!b || !L) return;
+      if (b.dataset.v === 'rect') delete L.cshape;
+      else {
+        L.cshape = 'ellipse';
+        // si lo que se ve no es cuadrado, se recorta parejo el lado más largo para que quede un círculo (después se puede ajustar)
+        const c = cropOf(L), fw = (L.ar || 1) * (L.sx || 1), fh = L.sy || 1, vw = fw * (1 - c.l - c.r), vh = fh * (1 - c.t - c.b);
+        if (Math.abs(vw - vh) > 1e-3) {
+          if (vw > vh) { const cut = (vw - vh) / fw / 2; cropSet('l')(L, (c.l + cut) * 1000); cropSet('r')(L, (c.r + cut) * 1000); }
+          else { const cut = (vh - vw) / fh / 2; cropSet('t')(L, (c.t + cut) * 1000); cropSet('b')(L, (c.b + cut) * 1000); }
+        }
+      }
+      changed(); syncPanel();
+    });
+    refreshers.push(L => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === (L.cshape === 'ellipse' ? 'ellipse' : 'rect'))));
+  }
   for (const [side, label] of [['t', 'Recortar arriba'], ['b', 'Recortar abajo'], ['l', 'Recortar izquierda'], ['r', 'Recortar derecha']])
     slider($('#tSizeRot'), { label, min: 0, max: 980, get: L => Math.round((L['c' + side] || 0) * 1000), set: cropSet(side), fmt: pctCrop, cls: 'img-only' });
   slider($('#tSizeRot'), { label: 'Giro', min: -180, max: 180, step: 0.5, get: L => L.rot || 0, set: (L, v) => { L.rot = snapRot(v); }, fmt: v => (Math.abs(v) < 0.05 ? '0' : v > 0 ? '+' + v : v) + '°' });
