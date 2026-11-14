@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.7';
+  const VERSION = 'v1.7.1';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -562,7 +562,9 @@
       }
       const cb = document.createElement('span'); cb.className = 'cbadge'; cb.innerHTML = CAROUSEL_ICON;
       d.append(cb);
-      d.addEventListener('click', () => onCellClick(it));
+      d.addEventListener('click', e => onCellClick(it, e));
+      d.addEventListener('pointerdown', e => cellPaintStart(it, e));
+      d.addEventListener('pointerenter', () => cellPaintOver(it));
       it.canvas = c; it.cell = d;
     }
     it.cell.classList.toggle('current', !!S.current && leaderOf(S.current) === it);
@@ -609,16 +611,41 @@
     S.order.forEach(id => drawThumb(S.items.get(id)));
     updateTitle();
   }
-  function onCellClick(it) {
+  function setSel(it, on) {
+    if (on) S.selected.add(it.id); else S.selected.delete(it.id);
+    it.cell.classList.toggle('selected', on);
+  }
+  function onCellClick(it, e) {
+    if (paint.eatClick) { paint.eatClick = false; return; }   // ya lo resolvió el mouse al apretar
     if (S.selecting && S.pasteMode === 'carousel' && S.selectFor === it) { toast('Ese es el carrusel que estás armando'); return; }
+    // Cmd/Ctrl + clic en la grilla: empieza a elegir publicaciones para descargar
+    if (!S.selecting && e && (e.metaKey || e.ctrlKey)) startSelect('export');
     if (S.selecting) {
-      S.selected.has(it.id) ? S.selected.delete(it.id) : S.selected.add(it.id);
-      it.cell.classList.toggle('selected', S.selected.has(it.id));
+      if (e && e.shiftKey && S.lastSel && S.items.has(S.lastSel)) {   // Mayúscula: todo el tramo
+        const a = S.order.indexOf(S.lastSel), b = S.order.indexOf(it.id);
+        if (a >= 0 && b >= 0) for (let i = Math.min(a, b); i <= Math.max(a, b); i++) setSel(S.items.get(S.order[i]), true);
+      } else setSel(it, !S.selected.has(it.id));
+      S.lastSel = it.id;
       updateSelectBar();
       return;
     }
     openEditor(it.id);
   }
+  // Con el mouse, eligiendo: apretar y arrastrar por encima de varias las marca (o desmarca) a todas.
+  const paint = { on: false, value: true, eatClick: false };
+  function cellPaintStart(it, e) {
+    if (!S.selecting || e.pointerType !== 'mouse' || e.button !== 0 || e.shiftKey) return;
+    if (S.pasteMode === 'carousel' && S.selectFor === it) return;
+    paint.on = true; paint.value = !S.selected.has(it.id); paint.eatClick = true;
+    setSel(it, paint.value); S.lastSel = it.id; updateSelectBar();
+    e.preventDefault();
+  }
+  function cellPaintOver(it) {
+    if (!paint.on || !S.selecting) return;
+    if (S.pasteMode === 'carousel' && S.selectFor === it) return;
+    setSel(it, paint.value); S.lastSel = it.id; updateSelectBar();
+  }
+  window.addEventListener('pointerup', () => { paint.on = false; setTimeout(() => { paint.eatClick = false; }, 0); });
 
   const sortable = window.Sortable ? Sortable.create(gridEl, {
     animation: 160, delay: 220, delayOnTouchOnly: true, touchStartThreshold: 6,
@@ -1349,10 +1376,11 @@
   // pegar en varias
   // "Pegar en…": elegir publicaciones de la grilla para pegar el color o la capa copiada.
   function startSelect(mode = 'color') {
-    if (mode === 'color' ? !S.clip : mode === 'layer' ? !T.hasLayerClip() : !S.current) return;
+    if (mode === 'color' ? !S.clip : mode === 'layer' ? !T.hasLayerClip() : mode === 'export' ? !S.order.length : !S.current) return;
     S.pasteMode = mode;
     S.selectFor = mode === 'carousel' ? leaderOf(S.current) : null;
-    $('#selectApply').textContent = mode === 'layer' ? 'Pegar capa' : mode === 'carousel' ? 'Sumar al carrusel' : 'Pegar color';
+    S.lastSel = null;
+    $('#selectApply').textContent = mode === 'layer' ? 'Pegar capa' : mode === 'carousel' ? 'Sumar al carrusel' : mode === 'export' ? 'Descargar' : 'Pegar color';
     S.selecting = true; S.selected.clear();
     document.body.classList.add('selecting');
     closeEditorMobile();
@@ -1370,8 +1398,10 @@
   }
   function updateSelectBar() {
     const n = S.selected.size;
-    $('#selectCount').textContent = n ? `${n} seleccionada${n > 1 ? 's' : ''}` : S.pasteMode === 'carousel' ? 'Tocá las publicaciones a sumar' : 'Tocá las fotos';
+    $('#selectCount').textContent = n ? `${n} seleccionada${n > 1 ? 's' : ''}` : S.pasteMode === 'carousel' ? 'Tocá las publicaciones a sumar'
+      : S.pasteMode === 'export' ? (isNarrow() ? 'Tocá las que querés descargar' : 'Tocá o arrastrá sobre las que querés descargar (Mayúscula: un tramo)') : 'Tocá las fotos';
     $('#selectApply').disabled = !n;
+    if (S.pasteMode === 'export') $('#selectApply').textContent = n ? `Descargar ${n}` : 'Descargar';
   }
   pasteManyBtn.addEventListener('click', () => startSelect('color'));
   $('#selectCancel').addEventListener('click', endSelect);
@@ -1381,6 +1411,12 @@
   });
   $('#selectApply').addEventListener('click', () => {
     const n = S.selected.size;
+    if (S.pasteMode === 'export') {
+      const ids = S.order.filter(id => S.selected.has(id));
+      endSelect();
+      exportPosts(ids);
+      return;
+    }
     if (S.pasteMode === 'carousel') {
       const lead = S.selectFor && S.items.get(S.selectFor.id);
       if (!lead) { endSelect(); return; }
@@ -1786,7 +1822,7 @@
   function backupChip(st) {
     backupBtn.hidden = !Backup.supported;
     backupBtn.classList.remove('ok', 'warn');
-    const t = { off: 'Copia en la compu', idle: 'Copia ✓', saving: 'Copiando…', paused: 'Copia en pausa', error: 'Copia: error' }[st.phase] || 'Copia';
+    const t = { off: 'Copia', idle: 'Copia ✓', saving: 'Copiando…', paused: 'Copia en pausa', error: 'Copia: error' }[st.phase] || 'Copia';
     backupBtn.textContent = t;
     if (st.phase === 'idle') backupBtn.classList.add('ok');
     if (st.phase === 'paused' || st.phase === 'error') backupBtn.classList.add('warn');
@@ -2077,15 +2113,31 @@
       await deliver([new File([blob], `${baseName(it.name)}-${suffix}.jpg`, { type: 'image/jpeg' })]);
     } catch (e) { console.error(e); toast('No se pudo exportar'); }
   });
-  $('#downloadAll').addEventListener('click', async () => {
+  $('#downloadAll').addEventListener('click', () => {
     if (!S.order.length) return;
-    // Numeradas en orden de publicación: la última de la grilla es la primera en subirse.
-    const ids = [...S.order].reverse();
+    $('#dlAllN').textContent = `Todas (${S.order.length})`;
+    $('#dlSheet').hidden = false;
+  });
+  $('#dlSheet').addEventListener('click', e => {
+    const sh = $('#dlSheet'), b = e.target.closest('button');
+    if (e.target === sh || (b && !b.dataset.dl)) { sh.hidden = true; return; }
+    if (!b) return;
+    sh.hidden = true;
+    if (b.dataset.dl === 'all') exportPosts([...S.order]);
+    else startSelect('export');
+  });
+  // Descarga las publicaciones elegidas (con todas sus diapositivas).
+  // Numeradas en orden de publicación según la grilla entera: la última de la grilla es la 01 (la primera en subirse).
+  async function exportPosts(chosen) {
+    const all = [...S.order].reverse(), want = new Set(chosen);
+    const ids = all.filter(id => want.has(id));
+    if (!ids.length) return;
     const files = [];
     try {
-      for (let i = 0; i < ids.length; i++) {
-        toast(`Preparando ${i + 1} de ${ids.length}…`, true);
-        const list = slidesOf(S.items.get(ids[i])), n = String(i + 1).padStart(2, '0');
+      for (let j = 0; j < ids.length; j++) {
+        toast(`Preparando ${j + 1} de ${ids.length}…`, true);
+        const i = all.indexOf(ids[j]);
+        const list = slidesOf(S.items.get(ids[j])), n = String(i + 1).padStart(2, '0');
         for (let k = 0; k < list.length; k++) {
           const blob = await exportItem(list[k]);
           files.push(new File([blob], list.length > 1 ? `mosaico-${n}-${k + 1}.jpg` : `mosaico-${n}.jpg`, { type: 'image/jpeg' }));
@@ -2094,7 +2146,7 @@
       toast('Listas — numeradas en el orden en que hay que publicarlas');
       await deliver(files);
     } catch (e) { console.error(e); toast('No se pudo exportar'); }
-  });
+  }
 
   // ================= Teclado =================
   document.addEventListener('keydown', e => {

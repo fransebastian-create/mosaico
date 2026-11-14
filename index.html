@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Inter:wght@400;700&family=Playfair+Display:ital@0;1&display=swap">
-<link rel="stylesheet" href="styles.css?v=1.7">
+<link rel="stylesheet" href="styles.css?v=1.7.1">
 </head>
 <body>
 <div id="syncBanner" class="sync-banner" hidden><span id="syncBannerText"></span><button id="syncBannerBtn" class="btn">Reconectar</button></div>
@@ -40,7 +40,7 @@
       <span id="count"></span>
       <button id="backupBtn" class="chip" hidden title="Copia automática en una carpeta de tu computadora">Copia</button>
       <button id="trashBtn" class="chip" title="Publicaciones eliminadas: recuperarlas">Eliminadas</button>
-      <button id="downloadAll" class="btn">Descargar todas</button>
+      <button id="downloadAll" class="btn">Descargar…</button>
     </footer>
   </section>
 
@@ -143,6 +143,15 @@
     <button class="chip">Cancelar</button>
   </div>
 </div>
+<div id="dlSheet" class="sheet" hidden>
+  <div class="sheet-card">
+    <p><strong>Descargar</strong></p>
+    <button class="btn primary" data-dl="all" id="dlAllN">Todas</button>
+    <button class="btn" data-dl="pick">Elegir cuáles…</button>
+    <p class="muted-s">Atajo en la computadora: ⌘ / Ctrl + clic sobre las publicaciones de la grilla.</p>
+    <button class="chip">Cancelar</button>
+  </div>
+</div>
 <div id="backupSheet" class="sheet" hidden>
   <div class="sheet-card trash-card">
     <p><strong>Copia en la computadora</strong></p>
@@ -173,9 +182,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="config.js?v=1.7"></script>
-<script src="drive.js?v=1.7"></script>
-<script src="texto.js?v=1.7"></script>
-<script src="app.js?v=1.7"></script>
+<script src="config.js?v=1.7.1"></script>
+<script src="drive.js?v=1.7.1"></script>
+<script src="texto.js?v=1.7.1"></script>
+<script src="app.js?v=1.7.1"></script>
 </body>
 </html>
