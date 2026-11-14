@@ -565,3 +565,17 @@ body.has-banner { --bh: 44px; }
 .tp-group .chip { padding: 5px 9px; font-size: 12px; }
 .lp-actions .chip.act { background: var(--accent); color: var(--accent-ink); }
 .tp-group[hidden] { display: none; }
+
+/* formas */
+#textPanel.shape-mode > #tText, #textPanel.shape-mode .tp-field:not(.keep-shape), #textPanel.shape-mode #tBg,
+#textPanel.shape-mode .txt-only, #textPanel.shape-mode .img-only, #textPanel.shape-mode .no-shape, #textPanel.shape-mode > .hint,
+#textPanel:not(.shape-mode) .shape-only, #textPanel.is-ellipse .rect-only { display: none !important; }
+.tp-shape { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.tp-shape .tp-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.tp-shape .row { display: flex; gap: 6px; }
+.tside, .trad { display: none; position: absolute; pointer-events: auto; touch-action: none; background: #fff; border: 1.5px solid #1c1b1a; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+.tbox.shape:not(.multi):not(.locked) .tside, .tbox.shape:not(.multi):not(.locked):not(.ellipse) .trad { display: block; }
+.tside.r { right: -6px; top: 50%; width: 10px; height: 26px; margin-top: -13px; border-radius: 5px; cursor: ew-resize; }
+.tside.b { bottom: -6px; left: 50%; width: 26px; height: 10px; margin-left: -13px; border-radius: 5px; cursor: ns-resize; }
+.trad { width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #ffd34d; cursor: nwse-resize; }
+@media (pointer: coarse) { .tside.r { width: 14px; height: 34px; margin-top: -17px; right: -8px; } .tside.b { width: 34px; height: 14px; margin-left: -17px; bottom: -8px; } .trad { width: 18px; height: 18px; margin: -9px 0 0 -9px; } }

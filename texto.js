@@ -255,6 +255,49 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   // Recorte: qué fracción de la imagen se saca de cada lado (0 = nada).
   const cropOf = L => ({ l: L.cl || 0, r: L.cr || 0, t: L.ct || 0, b: L.cb || 0 });
+  // ---------------- formas (rectángulo con bordes redondeables y elipse) ----------------
+  // L.size = alto (fracción del alto de la publicación), L.ar = ancho / alto, L.radius = redondeo (0 a 1)
+  function shapePath(ctx, L, w, h) {
+    ctx.beginPath();
+    if (L.shape === 'ellipse') { ctx.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2); return; }
+    const r = clamp(L.radius || 0, 0, 1) * Math.min(w, h) / 2, x = -w / 2, y = -h / 2;
+    if (!r) { ctx.rect(x, y, w, h); return; }
+    ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r); ctx.closePath();
+  }
+  function drawShape(ctx, L, x0, H) {
+    const W = H * ASPECT, h = L.size * H, w = L.size * (L.ar || 1) * H;
+    L._box = { w: w / H, h: h / H };
+    if (L.hidden) return;
+    ctx.save();
+    ctx.translate(x0 + L.x * W, L.y * H);
+    ctx.rotate(rad(L.rot || 0));
+    ctx.globalAlpha = clamp(L.opacity ?? 1, 0, 1);
+    ctx.globalCompositeOperation = BLENDS[L.blend] ? L.blend : 'source-over';
+    setShadow(ctx, L, Math.min(w, h) * 0.35);
+    shapePath(ctx, L, w, h);
+    if (L.fill !== false) { ctx.fillStyle = L.color || '#ffffff'; ctx.fill(); }
+    const st = L.stroke;
+    if (st && st.on) {
+      if (L.fill !== false) ctx.shadowColor = 'transparent';
+      ctx.lineWidth = Math.max(1, (st.width ?? 0.3) * 0.1 * Math.min(w, h));
+      ctx.strokeStyle = L.fill === false ? (L.color || '#000000') : (st.color || '#000000'); ctx.lineJoin = 'round';   // sin relleno: el color elegido es el del borde
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function addShape(shape = 'rect') {
+    const it = S.current; if (!it) return;
+    it.texts = it.texts || [];
+    const L = { id: uid(), type: 'shape', shape, x: 0.5, y: 0.5, rot: 0, size: 0.25, ar: shape === 'ellipse' ? 1 : 1, radius: 0, color: lastShapeColor, opacity: 1, fill: true };
+    while (it.texts.some(o => Math.abs(o.x - L.x) < 0.01 && Math.abs(o.y - L.y) < 0.01)) L.y = Math.min(0.9, L.y + 0.08);
+    it.texts.push(L);
+    select(L.id); changed();
+  }
+  let lastShapeColor = '#e8c872';
+
   // Ajustes de color y teñido de una capa de imagen: se calculan una vez y se guardan hasta que cambien.
   const fxCache = new Map();
   const hasAdj = L => !!(L.adj && Object.values(L.adj).some(v => v));
@@ -321,7 +364,8 @@ window.createMosaicoText = function createMosaicoText(A) {
   document.body.append(imgInput);
   imgInput.addEventListener('change', () => { const fs = [...imgInput.files]; imgInput.value = ''; if (fs.length) addImageFiles(fs); });
   const isImg = L => !!L && L.type === 'image';
-  const maxSize = L => (isImg(L) ? 3 : 0.6);
+  const isShape = L => !!L && L.type === 'shape';
+  const maxSize = L => (isImg(L) || isShape(L) ? 3 : 0.6);
 
   // Modos de fusión (como en Photoshop). La clave es el nombre que entiende el navegador.
   const BLENDS = { 'source-over': 'Normal', multiply: 'Multiplicar', screen: 'Trama', overlay: 'Superponer', 'soft-light': 'Luz suave', 'hard-light': 'Luz fuerte', darken: 'Oscurecer', lighten: 'Aclarar', difference: 'Diferencia' };
@@ -333,6 +377,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     const x0 = (ow - oh * ASPECT) / 2;
     for (const L of it.texts) {
       if (L.type === 'image') { drawImageLayer(ctx, L, x0, oh); continue; }
+      if (L.type === 'shape') { drawShape(ctx, L, x0, oh); continue; }
       if (L.hidden) { if (!L._box) { const m = layout(ctx, L, oh); L._box = { w: m.maxW * (L.sx || 1) / oh, h: m.h * (L.sy || 1) / oh }; } continue; }
       drawText(ctx, L, x0, oh);
     }
@@ -382,6 +427,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!id) { multi.clear(); pickMany = false; }
     document.body.classList.toggle('text-mode', !!id);
     panel.classList.toggle('img-mode', isImg(cur()));
+    panel.classList.toggle('shape-mode', isShape(cur()));
     syncPanel(); A.requestRender(); renderLayers(); renderGroupBar();
     if (!id) hideBox();
   }
@@ -436,9 +482,10 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   // ---- recuadro de selección y guías ----
   const layer = document.createElement('div'); layer.className = 'tlayer';
-  layer.innerHTML = '<div class="tsnap v"></div><div class="tsnap h"></div><div class="tbox" hidden><div class="thandle" title="Arrastrá para agrandar y girar"></div></div>';
+  layer.innerHTML = '<div class="tsnap v"></div><div class="tsnap h"></div><div class="tbox" hidden><div class="thandle" title="Arrastrá para agrandar y girar"></div><div class="tside r" title="Arrastrá para cambiar el ancho"></div><div class="tside b" title="Arrastrá para cambiar el alto"></div><div class="trad" title="Arrastrá hacia adentro para redondear los bordes"></div></div>';
   frame.append(layer);
   const box = layer.querySelector('.tbox'), handle = layer.querySelector('.thandle');
+  const sideR = layer.querySelector('.tside.r'), sideB = layer.querySelector('.tside.b'), radH = layer.querySelector('.trad');
   const snapV = layer.querySelector('.tsnap.v'), snapH = layer.querySelector('.tsnap.h');
   function hideBox() { box.hidden = true; extraBoxes.forEach(b => { b.hidden = true; }); snapV.classList.remove('on'); snapH.classList.remove('on'); }
   const extraBoxes = [];
@@ -460,6 +507,12 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!L || !L._box) { box.hidden = true; return; }
     placeBox(box, L);
     box.classList.toggle('multi', isMulti());
+    box.classList.toggle('shape', isShape(L)); box.classList.toggle('ellipse', isShape(L) && L.shape === 'ellipse');
+    if (isShape(L)) {   // tirador de redondeo: más adentro cuanto más redondeado
+      const Hc = frame.clientHeight, w = L.size * (L.ar || 1) * Hc, h = L.size * Hc;
+      const m = 12 + (L.radius || 0) * Math.min(w, h) * 0.35;
+      radH.style.left = 6 + m + 'px'; radH.style.top = 6 + m + 'px';
+    }
   }
 
   // ---- gestos ----
@@ -561,7 +614,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       snapV.classList.remove('on'); snapH.classList.remove('on');
       if (wasTap) {   // doble toque sobre el texto: editar
         const now = Date.now();
-        if (lastTap.id === L.id && now - lastTap.t < 350 && !isImg(L)) focusText();
+        if (lastTap.id === L.id && now - lastTap.t < 350 && !isImg(L) && !isShape(L)) focusText();
         lastTap = { t: now, id: L.id };
       }
     }
@@ -590,6 +643,51 @@ window.createMosaicoText = function createMosaicoText(A) {
   const endHandle = e => { if (hg && hg.id === e.pointerId) { hg = null; frame.classList.remove('dragging'); } };
   handle.addEventListener('pointerup', endHandle);
   handle.addEventListener('pointercancel', endHandle);
+  // formas: tiradores de los costados (ancho / alto, el lado opuesto queda quieto) y de redondeo
+  let sg = null;
+  const localPt = (L, e) => {   // punto del puntero en coordenadas de la forma (px, sin giro, desde el centro)
+    const rect = frame.getBoundingClientRect();
+    const cx = rect.left + L.x * rect.width, cy = rect.top + L.y * rect.height, a = -rad(L.rot || 0);
+    const dx = e.clientX - cx, dy = e.clientY - cy;
+    return { x: dx * Math.cos(a) - dy * Math.sin(a), y: dx * Math.sin(a) + dy * Math.cos(a), H: rect.height };
+  };
+  function sideStart(kind, e) {
+    const L = cur(); if (!L || !isShape(L) || L.locked || isMulti()) return;
+    e.stopPropagation(); e.preventDefault();
+    try { e.target.setPointerCapture(e.pointerId); } catch { }
+    sg = { kind, id: e.pointerId, L, p0: localPt(L, e), size0: L.size, ar0: L.ar || 1, x0: L.x, y0: L.y };
+    frame.classList.add('dragging');
+  }
+  function sideMove(e) {
+    if (!sg || sg.id !== e.pointerId) return;
+    e.stopPropagation();
+    const { L } = sg, p = localPt(L, e), H = p.H, a = rad(L.rot || 0);
+    if (sg.kind === 'rad') {
+      const w = L.size * (L.ar || 1) * H, h = L.size * H;
+      const m = ((p.x + w / 2) + (p.y + h / 2)) / 2;
+      L.radius = clamp((m - 12) / (0.35 * Math.min(w, h)), 0, 1);
+    } else {
+      const w0 = sg.size0 * sg.ar0, h0 = sg.size0;   // en unidades del alto
+      let d;   // cuánto se estiró (en unidades del alto), y el centro se corre la mitad para que el otro lado no se mueva
+      if (sg.kind === 'r') {
+        d = (p.x - sg.p0.x) / H; const wNew = Math.max(0.005, w0 + d); d = wNew - w0;
+        L.ar = wNew / h0; L.size = h0;
+        L.x = sg.x0 + (Math.cos(a) * d / 2) / ASPECT; L.y = sg.y0 + Math.sin(a) * d / 2;
+      } else {
+        d = (p.y - sg.p0.y) / H; const hNew = Math.max(0.005, h0 + d); d = hNew - h0;
+        L.size = hNew; L.ar = w0 / hNew;
+        L.x = sg.x0 + (-Math.sin(a) * d / 2) / ASPECT; L.y = sg.y0 + Math.cos(a) * d / 2;
+      }
+    }
+    changed(); syncPanelValues();
+  }
+  const sideEnd = e => { if (sg && sg.id === e.pointerId) { sg = null; frame.classList.remove('dragging'); } };
+  [[sideR, 'r'], [sideB, 'b'], [radH, 'rad']].forEach(([el, k]) => {
+    el.addEventListener('pointerdown', e => sideStart(k, e));
+    el.addEventListener('pointermove', sideMove);
+    el.addEventListener('pointerup', sideEnd);
+    el.addEventListener('pointercancel', sideEnd);
+  });
 
   // rueda / trackpad: si hay un texto elegido, agranda el texto en vez de la foto
   function wheel(e) {
@@ -616,7 +714,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     const rect = frame.getBoundingClientRect();
     const L = hitTest(e.clientX - rect.left, e.clientY - rect.top, rect);
     if (!L) return false;
-    select(L.id); if (!isImg(L)) focusText();
+    select(L.id); if (!isImg(L) && !isShape(L)) focusText();
     return true;
   }
   function keydown(e) {
@@ -683,7 +781,8 @@ window.createMosaicoText = function createMosaicoText(A) {
         <button data-v="left" title="Izquierda">${ALIGN_ICON.left}</button><button data-v="center" title="Centro">${ALIGN_ICON.center}</button><button data-v="right" title="Derecha">${ALIGN_ICON.right}</button>
       </div></div>
     <div id="tSizeRot"></div>
-    <div class="tp-field"><span>Color</span><div class="swatches" id="tColors"></div></div>
+    <div class="tp-shape shape-only" id="tShape"></div>
+    <div class="tp-field keep-shape"><span>Color</span><div class="swatches" id="tColors"></div></div>
     <div id="tLook"></div>
     <div class="tp-sec img-only" id="tImgAdj"></div>
     <div class="tp-sec img-only" id="tTint"></div>
@@ -853,8 +952,28 @@ window.createMosaicoText = function createMosaicoText(A) {
   slider($('#tSizeRot'), { label: 'Tamaño', min: 0, max: 1000, get: L => posFromIz(L.size * 1000), set: (L, v) => { L.size = izFromPos(v) / 1000; }, fmt: v => Math.round(izFromPos(v) / 10) + '%', cls: 'img-only' });
   // Ancho / Alto: de 50% a 150%, de a 0,1%
   const pctScale = v => (v / 10).toFixed(1) + '%';
-  slider($('#tSizeRot'), { label: 'Ancho', min: 500, max: 1500, get: L => Math.round((L.sx || 1) * 1000), set: (L, v) => { L.sx = v / 1000; if (v === 1000) delete L.sx; }, fmt: pctScale });
-  slider($('#tSizeRot'), { label: 'Alto', min: 500, max: 1500, get: L => Math.round((L.sy || 1) * 1000), set: (L, v) => { L.sy = v / 1000; if (v === 1000) delete L.sy; }, fmt: pctScale });
+  slider($('#tSizeRot'), { label: 'Ancho', min: 500, max: 1500, get: L => Math.round((L.sx || 1) * 1000), set: (L, v) => { L.sx = v / 1000; if (v === 1000) delete L.sx; }, fmt: pctScale, cls: 'no-shape' });
+  slider($('#tSizeRot'), { label: 'Alto', min: 500, max: 1500, get: L => Math.round((L.sy || 1) * 1000), set: (L, v) => { L.sy = v / 1000; if (v === 1000) delete L.sy; }, fmt: pctScale, cls: 'no-shape' });
+  // Formas: ancho y alto propios (en % de la publicación), forma y redondeo
+  {
+    const el = $('#tShape');
+    el.innerHTML = `<div class="tp-row"><span>Forma</span><div class="seg" id="tShapeKind"><button data-v="rect">▭ Rectángulo</button><button data-v="ellipse">◯ Círculo</button></div></div>
+      <div class="row"><button class="chip" id="tShapeFill">Sin relleno</button><button class="chip" id="tShapeSquare" title="Mismo ancho que alto">Ancho = alto</button></div>`;
+    const kind = el.querySelector('#tShapeKind'), fill = el.querySelector('#tShapeFill'), sq = el.querySelector('#tShapeSquare');
+    kind.addEventListener('click', e => { const b = e.target.closest('[data-v]'), L = cur(); if (!b || !L) return; L.shape = b.dataset.v; changed(); syncPanel(); renderLayers(); });
+    fill.addEventListener('click', () => { const L = cur(); if (!L) return; L.fill = L.fill === false; if (L.fill === false && !(L.stroke && L.stroke.on)) L.stroke = { ...clone(DEFAULT.stroke), ...(L.stroke || {}), on: true }; changed(); syncPanel(); });
+    sq.addEventListener('click', () => { const L = cur(); if (!L) return; const wv = L.size * (L.ar || 1); L.size = Math.sqrt(L.size * wv); L.ar = 1; changed(); syncPanel(); });
+    refreshers.push(L => {
+      if (!isShape(L)) return;
+      kind.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === (L.shape || 'rect')));
+      fill.classList.toggle('on', L.fill === false);
+      el.closest('#textPanel').classList.toggle('is-ellipse', L.shape === 'ellipse');
+    });
+  }
+  const pctW = v => (v / 10).toFixed(1) + '%';
+  slider($('#tSizeRot'), { label: 'Ancho', min: 10, max: 2000, get: L => Math.round((L.size || 0) * (L.ar || 1) / ASPECT * 1000), set: (L, v) => { const h = L.size || 0.25; L.ar = Math.max(0.005, (v / 1000) * ASPECT / h); }, fmt: pctW, cls: 'shape-only' });
+  slider($('#tSizeRot'), { label: 'Alto', min: 10, max: 2000, get: L => Math.round((L.size || 0) * 1000), set: (L, v) => { const wv = (L.size || 0.25) * (L.ar || 1); L.size = Math.max(0.001, v / 1000); L.ar = wv / L.size; }, fmt: pctW, cls: 'shape-only' });
+  slider($('#tSizeRot'), { label: 'Redondear bordes', min: 0, max: 100, get: L => Math.round((L.radius || 0) * 100), set: (L, v) => { L.radius = v / 100; if (!v) delete L.radius; }, fmt: pct, cls: 'shape-only rect-only' });
   // Recorte de imágenes: lo que queda no se mueve ni cambia de tamaño en la pantalla; sólo se va el borde.
   const cropSet = side => (L, v) => {
     const fw = L.size * (L.ar || 1) * (L.sx || 1), fh = L.size * (L.sy || 1);
@@ -996,7 +1115,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   let pickAdded = null;   // color agregado a la paleta en esta apertura del selector (se reemplaza, no se acumula)
   const textPicker = makePicker({
     get: L => L.color || '#ffffff',
-    set: (L, c) => { L.color = c; },
+    set: (L, c) => { L.color = c; if (isShape(L)) lastShapeColor = c; },
     onOpen: () => { pickAdded = null; },
     commit: c => {   // al soltar, el color queda en la paleta compartida
       c = c.toLowerCase();
@@ -1076,8 +1195,10 @@ window.createMosaicoText = function createMosaicoText(A) {
     copy: '<svg viewBox="0 0 20 20"><rect x="7" y="7" width="10" height="10" rx="1.6"/><path d="M13 7V4.6A1.6 1.6 0 0 0 11.4 3H4.6A1.6 1.6 0 0 0 3 4.6v6.8A1.6 1.6 0 0 0 4.6 13H7"/></svg>',
     img: '<svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="1.6"/><circle cx="7.5" cy="8.3" r="1.4"/><path d="M3.5 14.5l4.3-3.8 3 2.6 2.2-1.9 3.6 3.1"/></svg>',
     grip: '<svg viewBox="0 0 20 20"><path d="M7 5h.01M13 5h.01M7 10h.01M13 10h.01M7 15h.01M13 15h.01"/></svg>',
+    rect: '<svg viewBox="0 0 20 20"><rect x="3.5" y="5" width="13" height="10" rx="2"/></svg>',
+    ellipse: '<svg viewBox="0 0 20 20"><ellipse cx="10" cy="10" rx="7" ry="6"/></svg>',
   };
-  const layerName = L => L.name || (isImg(L) ? 'Imagen' : (L.text || '').split('\n')[0].trim().slice(0, 32) || 'Texto');
+  const layerName = L => L.name || (isImg(L) ? 'Imagen' : isShape(L) ? (L.shape === 'ellipse' ? 'Círculo' : 'Rectángulo') : (L.text || '').split('\n')[0].trim().slice(0, 32) || 'Texto');
   let layerClip = (() => { try { return JSON.parse(localStorage.getItem('mosaico.layerClip')); } catch { return null; } })();
   function copyLayer(L) {
     if (!L) return;
@@ -1111,7 +1232,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       <div class="lp-row${L.id === sel || multi.has(L.id) ? ' on' : ''}${L.hidden ? ' hid' : ''}" data-id="${L.id}">
         <span class="lp-grip" title="Arrastrá para cambiar el orden">${IC.grip}</span>
         <button class="lp-ic" data-l="eye" title="${L.hidden ? 'Mostrar' : 'Ocultar'}">${L.hidden ? IC.eyeOff : IC.eye}</button>
-        <button class="lp-name" data-l="sel" title="Tocá para elegirla · doble toque para renombrar"><span class="lp-type">${isImg(L) ? IC.img : 'T'}</span>${escHtml(layerName(L))}</button>
+        <button class="lp-name" data-l="sel" title="Tocá para elegirla · doble toque para renombrar"><span class="lp-type">${isImg(L) ? IC.img : isShape(L) ? (L.shape === 'ellipse' ? IC.ellipse : IC.rect) : 'T'}</span>${escHtml(layerName(L))}</button>
         <button class="lp-ic${L.locked ? ' act' : ''}" data-l="lock" title="${L.locked ? 'Desbloquear' : 'Bloquear (no se mueve sin querer)'}">${L.locked ? IC.lock : IC.unlock}</button>
         <button class="lp-ic" data-l="copy" title="Copiar esta capa">${IC.copy}</button>
       </div>`).join('');
@@ -1121,6 +1242,7 @@ window.createMosaicoText = function createMosaicoText(A) {
         <div class="lp-actions">
           <button class="chip accent" data-l="addtext" id="addTextBtn" title="Agregar un texto">+ Texto</button>
           <button class="chip accent" data-l="addimg" id="addImgBtn" title="Agregar una imagen (PNG, logo, firma…) como capa">+ Imagen</button>
+          <button class="chip accent" data-l="addshape" id="addShapeBtn" title="Agregar una forma (rectángulo o círculo)">+ Forma</button>
           ${ts.length > 1 ? `<button class="chip${pickMany ? ' act' : ''}" data-l="many" title="Elegir varias capas para moverlas o alinearlas juntas (en la computadora: Mayúscula o ⌘ + clic)">${pickMany ? 'Listo' : 'Elegir varias'}</button>` : ''}
           ${layerClip ? `<button class="chip" data-l="paste" title="Pegar la capa copiada">Pegar capa</button><button class="chip" data-l="pastemany" title="Pegar la capa copiada en varias publicaciones">Pegar en…</button>` : ''}
         </div></div>
@@ -1149,6 +1271,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     const act = b.dataset.l;
     if (act === 'addtext') return add();
     if (act === 'addimg') return imgInput.click();
+    if (act === 'addshape') return addShape('rect');
     if (act === 'paste') return pasteLayer();
     if (act === 'pastemany') return A.startSelect('layer');
     if (act === 'bg') return deselect();
