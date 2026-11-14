@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.5.1';
+  const VERSION = 'v1.6';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -462,10 +462,31 @@
   const T = window.createMosaicoText({
     S, ASPECT, frame, clamp, rad, snapRot, normRot, uid, toast: (...a) => toast(...a), DB, onDoubleTap,
     saveItem: it => saveItem(it), requestRender: () => requestRender(),
-    redrawAll: () => { S.order.forEach(id => drawThumb(S.items.get(id))); requestRender(); },
+    redrawAll: () => { for (const it of S.items.values()) drawThumb(it); requestRender(); },
     kickSync: () => Sync && Sync.kick(), trashFile: id => Sync && Sync.trashFile(id),
     startSelect: mode => startSelect(mode),
+    loadImage: b => loadImage(b), prepLayerImage: f => prepLayerImage(f),
+    fetchFile: id => (Sync ? Sync.fetchFile(id) : Promise.reject(new Error('la imagen está en la nube y no hay conexión'))),
   });
+  // Imagen para una capa: se achica a 2160 px como mucho y conserva la transparencia (PNG).
+  async function prepLayerImage(f) {
+    if (isVideoFile(f)) throw new Error('los videos no pueden ser capas');
+    let src = f, img;
+    try { img = await loadImage(f); }
+    catch (e) { if (!isHeic(f)) throw e; toast('Convirtiendo foto HEIC…', true); src = await heicToJpeg(f); img = await loadImage(src); }
+    let w = img.naturalWidth || 1000, h = img.naturalHeight || 1000;
+    const type = src.type || '';
+    const alpha = !/jpe?g|hei[cf]/i.test(type);
+    if (Math.max(w, h) > 2160 || /svg/i.test(type) || !/^image\/(png|jpe?g|webp)$/i.test(type)) {
+      const k = Math.min(1, 2160 / Math.max(w, h));
+      const c = canvas(Math.round(w * k), Math.round(h * k));
+      const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(img, 0, 0, c.width, c.height);
+      const blob = await toBlob(c, alpha ? 'image/png' : 'image/jpeg', 0.92);
+      w = c.width; h = c.height; c.width = 0;
+      return { blob, w, h };
+    }
+    return { blob: new Blob([await src.arrayBuffer()], { type }), w, h };
+  }
 
   let toastTimer;
   function toast(msg, sticky = false, ms = 2600) {
@@ -728,7 +749,7 @@
       const { orig, thumbBlob, w, h } = await readImageFile(f);
       await DB.put('blobs', { id: it.id, orig, thumb: thumbBlob });
       Object.assign(it, { kind: 'image', w, h, name: f.name || 'foto.jpg', crop: { z: 1, cx: 0.5, cy: 0.5, rot: 0 } });
-      delete it.bg;
+      // el color de fondo queda guardado debajo: con "Quitar foto" vuelve
       if (it.sync && it.sync.media && it.sync.media.orig) it.sync.mediaDirty = true;   // ya había foto en la nube: se reemplaza
       it.thumb = await loadImage(thumbBlob);
       S.full = null;
@@ -739,6 +760,21 @@
     } catch (e) { console.error(e); toast('No se pudo leer la foto: ' + (e.message || e), false, 7000); }
   }
   $('#photoBtn').addEventListener('click', () => photoInput.click());
+  // ---- quitar la foto de fondo: vuelve el fondo de color (las capas y el color quedan) ----
+  async function removePhoto(it) {
+    if (!it || it.kind !== 'image') return;
+    if (!confirm('¿Quitar la foto de fondo? Vuelve el fondo de color; los textos y las imágenes de las capas quedan.')) return;
+    it.kind = 'blank'; it.bg = it.bg || BLANK_BG; it.w = 1080; it.h = 1350;
+    it.crop = { z: 1, cx: 0.5, cy: 0.5, rot: 0 };
+    it.thumb = solidImage(it.bg);
+    S.full = null;
+    await DB.run(['blobs'], 'readwrite', t => { t.objectStore('blobs').delete(it.id); }).catch(reportError);
+    saveItem(it);
+    await openEditor(it.id);
+    drawThumb(it);
+    toast('Listo: fondo de color. Elegí el color abajo, en Fondo');
+  }
+  $('#removePhotoBtn').addEventListener('click', () => removePhoto(S.current));
 
   // ---- fondo de la publicación vacía ----
   const BG_BASE = ['#ffffff', BLANK_BG, '#d9cbb8', '#2b2a28', '#000000'];
@@ -802,7 +838,11 @@
     dropZones.querySelectorAll('.dz').forEach(d => d.classList.remove('hot'));
     const it = S.current;
     if (z && it) {
-      if (z.dataset.drop === 'photo') {
+      if (z.dataset.drop === 'layer') {
+        const imgsF = files.filter(x => !isVideoFile(x));
+        if (!imgsF.length) { toast('Los videos no pueden ser capas: soltalos en “Sumar al carrusel”', false, 5000); return; }
+        T.addImageFiles(imgsF, it);
+      } else if (z.dataset.drop === 'photo') {
         const f = files.find(x => !isVideoFile(x)) || files[0];
         if (files.length > 1) toast('Se usa la primera foto; para sumar varias, soltalas en “Sumar al carrusel”', false, 5000);
         setPhoto(it, f);
@@ -871,6 +911,7 @@
     document.body.classList.toggle('is-blank', blank);
     $('#photoBtn').hidden = isVid;
     $('#photoBtn').textContent = blank ? '+ Poner foto' : 'Cambiar foto';
+    $('#removePhotoBtn').hidden = it.kind !== 'image';
     if (blank) {
       S.full = { id, img: it.thumb, w: 40, h: 50 };
       renderBgSwatches(); bgPicker.refresh();
@@ -1658,7 +1699,7 @@
       if (m.kind === 'blank') {
         it.bg = m.bg; it.thumb = solidImage(m.bg);
         if (S.full && S.full.id === it.id) S.full = { id: it.id, img: it.thumb, w: 40, h: 50 };
-      } else delete it.bg;
+      } else if (m.bg) it.bg = m.bg;
       if (thumbBlob) {
         it.thumb = await loadImage(thumbBlob);
         await saveLocalSafe(() => DB.put('blobs', { id: it.id, thumb: thumbBlob }));   // cambió la portada: el original viejo ya no sirve
@@ -1678,6 +1719,17 @@
       }
     },
     async onProjectChanged() { renderGridSoon(); },
+    // imágenes de las capas: se suben una vez y la capa guarda el archivo de la nube (fileId)
+    async layerImage(imgId) { const r = await DB.get('blobs', 'L:' + imgId); return r || null; },
+    async setLayerFileId(imgId, fileId) {
+      const r = await DB.get('blobs', 'L:' + imgId);
+      if (r) await DB.put('blobs', { ...r, fileId }).catch(() => { });
+      for (const x of S.items.values()) {
+        let ch = false;
+        for (const L of x.texts || []) if (L.type === 'image' && L.img === imgId && L.fileId !== fileId) { L.fileId = fileId; ch = true; }
+        if (ch && x.sync) persistItem(x);
+      }
+    },
     library: T.library,
     fonts: T.fonts,
   };

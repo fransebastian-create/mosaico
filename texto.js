@@ -36,7 +36,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     p.then(() => A.redrawAll()).catch(() => { });
   }
   async function fontsReady(it) {
-    const fs = [...new Set((it.texts || []).map(L => fontOf(L.font)))];
+    await imagesReady(it);
+    const fs = [...new Set((it.texts || []).filter(L => L.type !== 'image').map(L => fontOf(L.font)))];
     await Promise.all(fs.map(f => (f.ready || Promise.resolve()).then(() => document.fonts.load(fontCSS(f, 40))).catch(() => { })));
   }
   async function registerFont(rec) {
@@ -213,6 +214,81 @@ window.createMosaicoText = function createMosaicoText(A) {
     ctx.restore();
   }
   let thinCanvas = null;
+  // ---------------- capas de imagen (PNG, logos, firmas…) ----------------
+  // La imagen se guarda una sola vez en el dispositivo ("L:<id>") y en la nube (archivos/); la capa sólo la nombra.
+  const imgTries = new Map();
+  const imgs = new Map();   // id de imagen -> { state: 'loading' | 'ok' | 'err', img, w, h, t, p }
+  function imageOf(L) {
+    let e = imgs.get(L.img);
+    if (e && (e.state !== 'err' || Date.now() - e.t < 12000)) return e;
+    e = { state: 'loading' }; imgs.set(L.img, e);
+    e.p = (async () => {
+      const rec = await DB.get('blobs', 'L:' + L.img).catch(() => null);
+      let blob = rec && rec.orig;
+      if (!blob && L.fileId) {
+        blob = await A.fetchFile(L.fileId);
+        await DB.put('blobs', { id: 'L:' + L.img, orig: blob, fileId: L.fileId }).catch(() => { });
+      }
+      if (!blob) throw new Error('no está la imagen de la capa');
+      const img = await A.loadImage(blob);
+      Object.assign(e, { img, w: img.naturalWidth, h: img.naturalHeight, state: 'ok' });
+      A.redrawAll();
+    })().catch(err => {
+      console.warn(err); Object.assign(e, { state: 'err', t: Date.now() });
+      const n = (imgTries.get(L.img) || 0) + 1; imgTries.set(L.img, n);
+      if (n <= 5) setTimeout(() => A.redrawAll(), 12500 * n);   // p. ej. la nube todavía no estaba lista: probar de nuevo
+    });
+    return e;
+  }
+  async function imagesReady(it) {
+    const ls = (it.texts || []).filter(L => L.type === 'image' && !L.hidden);
+    await Promise.all(ls.map(L => { const e = imageOf(L); return e.p ? Promise.race([e.p, new Promise(r => setTimeout(r, 30000))]) : null; }));
+  }
+  function drawImageLayer(ctx, L, x0, H) {
+    const W = H * ASPECT, e = imageOf(L);
+    const ar = L.ar || (e.w ? e.w / e.h : 1), h = L.size * H, w = h * ar;
+    L._box = { w: w / H, h: L.size };
+    if (L.hidden || e.state !== 'ok') return;
+    ctx.save();
+    ctx.translate(x0 + L.x * W, L.y * H);
+    ctx.rotate(rad(L.rot || 0));
+    ctx.globalAlpha = clamp(L.opacity ?? 1, 0, 1);
+    ctx.globalCompositeOperation = BLENDS[L.blend] ? L.blend : 'source-over';
+    setShadow(ctx, L, h * 0.35);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(e.img, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  }
+  async function addImageFiles(files, it = S.current) {
+    if (!it) return;
+    let last = null;
+    for (const f of files) {
+      try {
+        toast('Cargando la imagen…', true);
+        const { blob, w, h } = await A.prepLayerImage(f);
+        const imgId = uid();
+        await DB.put('blobs', { id: 'L:' + imgId, orig: blob });
+        const ar = w / h;
+        const L = {
+          id: uid(), type: 'image', img: imgId, ar, name: (f.name || 'Imagen').replace(/\.[^.]+$/, '').slice(0, 32),
+          x: 0.5, y: 0.5, rot: 0, opacity: 1, size: Math.min(0.5, 0.8 * ASPECT / ar),
+        };
+        it.texts = it.texts || [];
+        while (it.texts.some(o => Math.abs(o.x - L.x) < 0.01 && Math.abs(o.y - L.y) < 0.01)) L.y = Math.min(0.9, L.y + 0.08);
+        it.texts.push(L); last = L;
+        toast('Imagen agregada como capa');
+      } catch (e) { console.error(e); toast(`No se pudo leer ${f.name || 'la imagen'}: ${e.message || e}`, false, 7000); }
+    }
+    if (last && S.current === it) { select(last.id); changed(); }
+    else if (last) { A.saveItem(it); A.redrawAll(); }
+  }
+  const imgInput = document.createElement('input');
+  imgInput.type = 'file'; imgInput.accept = 'image/*,.heic,.heif,.png,.svg'; imgInput.multiple = true; imgInput.hidden = true;
+  document.body.append(imgInput);
+  imgInput.addEventListener('change', () => { const fs = [...imgInput.files]; imgInput.value = ''; if (fs.length) addImageFiles(fs); });
+  const isImg = L => !!L && L.type === 'image';
+  const maxSize = L => (isImg(L) ? 3 : 0.6);
+
   // Modos de fusión (como en Photoshop). La clave es el nombre que entiende el navegador.
   const BLENDS = { 'source-over': 'Normal', multiply: 'Multiplicar', screen: 'Trama', overlay: 'Superponer', 'soft-light': 'Luz suave', 'hard-light': 'Luz fuerte', darken: 'Oscurecer', lighten: 'Aclarar', difference: 'Diferencia' };
   // Dibuja todas las capas de una publicación en un lienzo de ow×oh (4:5 o miniatura 3:4).
@@ -222,6 +298,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const x0 = (ow - oh * ASPECT) / 2;
     for (const L of it.texts) {
+      if (L.type === 'image') { drawImageLayer(ctx, L, x0, oh); continue; }
       if (L.hidden) { if (!L._box) { const m = layout(ctx, L, oh); L._box = { w: m.maxW / oh, h: m.h / oh }; } continue; }
       drawText(ctx, L, x0, oh);
     }
@@ -256,6 +333,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   function select(id) {
     sel = id;
     document.body.classList.toggle('text-mode', !!id);
+    panel.classList.toggle('img-mode', isImg(cur()));
     syncPanel(); A.requestRender(); renderLayers();
     if (!id) hideBox();
   }
@@ -349,7 +427,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     g.raw.y += (after.y - before.y) / rect.height;
     placeWithSnap(L, g.raw.x, g.raw.y);
     if (g.ptrs.size >= 2 && before.d > 0) {
-      L.size = clamp(L.size * after.d / before.d, 0.012, 0.6);
+      L.size = clamp(L.size * after.d / before.d, 0.012, maxSize(L));
       const tw = g.twist;
       if (tw) {
         tw.acc += normRot(after.ang - before.ang);
@@ -371,7 +449,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       snapV.classList.remove('on'); snapH.classList.remove('on');
       if (wasTap) {   // doble toque sobre el texto: editar
         const now = Date.now();
-        if (lastTap.id === L.id && now - lastTap.t < 350) focusText();
+        if (lastTap.id === L.id && now - lastTap.t < 350 && !isImg(L)) focusText();
         lastTap = { t: now, id: L.id };
       }
     }
@@ -393,7 +471,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!hg || hg.id !== e.pointerId) return;
     e.stopPropagation();
     const d = Math.hypot(e.clientX - hg.cx, e.clientY - hg.cy), a = Math.atan2(e.clientY - hg.cy, e.clientX - hg.cx) * 180 / Math.PI;
-    hg.L.size = clamp(hg.size0 * d / hg.d0, 0.012, 0.6);
+    hg.L.size = clamp(hg.size0 * d / hg.d0, 0.012, maxSize(hg.L));
     hg.L.rot = snapRot(normRot(hg.rot0 + normRot(a - hg.a0)));
     changed(); syncPanelValues();
   });
@@ -405,7 +483,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   function wheel(e) {
     const L = cur(); if (!L || L.locked) return false;
     e.preventDefault();
-    L.size = clamp(L.size * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), 0.012, 0.6);
+    L.size = clamp(L.size * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), 0.012, maxSize(L));
     changed(); syncPanelValues();
     return true;
   }
@@ -415,7 +493,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     e.preventDefault();
     if (type === 'start') mg = { scale: 1, rotation: 0, L, tw: { acc: 0, on: false, start: L.rot || 0 } };
     else if (type === 'change' && mg) {
-      mg.L.size = clamp(mg.L.size * e.scale / mg.scale, 0.012, 0.6); mg.scale = e.scale;
+      mg.L.size = clamp(mg.L.size * e.scale / mg.scale, 0.012, maxSize(mg.L)); mg.scale = e.scale;
       mg.tw.acc += e.rotation - mg.rotation; mg.rotation = e.rotation;
       if (mg.tw.on || Math.abs(mg.tw.acc) >= 5) { mg.tw.on = true; mg.L.rot = snapRot(normRot(mg.tw.start + mg.tw.acc)); }
       changed(); syncPanelValues();
@@ -426,7 +504,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     const rect = frame.getBoundingClientRect();
     const L = hitTest(e.clientX - rect.left, e.clientY - rect.top, rect);
     if (!L) return false;
-    select(L.id); focusText();
+    select(L.id); if (!isImg(L)) focusText();
     return true;
   }
   function keydown(e) {
@@ -489,9 +567,9 @@ window.createMosaicoText = function createMosaicoText(A) {
       <button class="chip" id="tStyleSave">Guardar este estilo</button></div>
     <p class="hint">Arrastrá el texto para moverlo; con dos dedos (o la esquina) lo agrandás y girás. Doble toque para editarlo. Las líneas rosas aparecen al centrarlo.</p>`;
 
-  function slider(parent, { label, min, max, step = 1, get, set, fmt = v => v }) {
+  function slider(parent, { label, min, max, step = 1, get, set, fmt = v => v, cls = '' }) {
     const row = document.createElement('div');
-    row.className = 'slider';
+    row.className = 'slider ' + cls;
     row.innerHTML = `<label><span>${label}</span><output></output></label><input type="range" min="${min}" max="${max}" step="${step}">`;
     const inp = row.querySelector('input'), out = row.querySelector('output');
     inp.addEventListener('input', () => { const L = cur(); if (!L) return; set(L, +inp.value); out.textContent = fmt(+inp.value); changed(); });
@@ -642,9 +720,11 @@ window.createMosaicoText = function createMosaicoText(A) {
 
   // Tamaño: la barra no es pareja, así en los tamaños chicos y medianos (los que más se usan) se mueve más fino.
   const SZ0 = 12, SZ1 = 450, szFromPos = p => SZ0 + (SZ1 - SZ0) * (p / 1000) ** 2, posFromSz = z => Math.round(Math.sqrt(clamp((z - SZ0) / (SZ1 - SZ0), 0, 1)) * 1000);
-  slider($('#tSizeRot'), { label: 'Tamaño', min: 0, max: 1000, get: L => posFromSz(L.size * 1000), set: (L, v) => { L.size = szFromPos(v) / 1000; }, fmt: v => (szFromPos(v) / 10).toFixed(1) });
+  slider($('#tSizeRot'), { label: 'Tamaño', min: 0, max: 1000, get: L => posFromSz(L.size * 1000), set: (L, v) => { L.size = szFromPos(v) / 1000; }, fmt: v => (szFromPos(v) / 10).toFixed(1), cls: 'txt-only' });
+  const IZ0 = 12, IZ1 = 3000, izFromPos = p => IZ0 + (IZ1 - IZ0) * (p / 1000) ** 2, posFromIz = z => Math.round(Math.sqrt(clamp((z - IZ0) / (IZ1 - IZ0), 0, 1)) * 1000);
+  slider($('#tSizeRot'), { label: 'Tamaño', min: 0, max: 1000, get: L => posFromIz(L.size * 1000), set: (L, v) => { L.size = izFromPos(v) / 1000; }, fmt: v => Math.round(izFromPos(v) / 10) + '%', cls: 'img-only' });
   slider($('#tSizeRot'), { label: 'Giro', min: -180, max: 180, step: 0.5, get: L => L.rot || 0, set: (L, v) => { L.rot = snapRot(v); }, fmt: v => (Math.abs(v) < 0.05 ? '0' : v > 0 ? '+' + v : v) + '°' });
-  slider($('#tLook'), { label: 'Grosor', min: -100, max: 100, get: L => L.weight || 0, set: (L, v) => { L.weight = v; }, fmt: v => (v > 0 ? '+' : '') + v });
+  slider($('#tLook'), { label: 'Grosor', min: -100, max: 100, get: L => L.weight || 0, set: (L, v) => { L.weight = v; }, fmt: v => (v > 0 ? '+' : '') + v, cls: 'txt-only' });
   slider($('#tLook'), { label: 'Opacidad', min: 5, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct });
   {
     const row = document.createElement('label'); row.className = 'tp-color tp-blend';
@@ -654,8 +734,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     refreshers.push(L => { sl.value = BLENDS[L.blend] ? L.blend : 'source-over'; });
     $('#tLook').append(row);
   }
-  slider($('#tLook'), { label: 'Interletrado', min: -100, max: 300, step: 1, get: L => L.letter || 0, set: (L, v) => { L.letter = v; }, fmt: v => (v > 0 ? '+' : '') + v });
-  slider($('#tLook'), { label: 'Interlineado', min: 70, max: 250, step: 1, get: L => Math.round((L.line || 1.2) * 100), set: (L, v) => { L.line = v / 100; }, fmt: v => (v / 100).toFixed(2) });
+  slider($('#tLook'), { label: 'Interletrado', min: -100, max: 300, step: 1, get: L => L.letter || 0, set: (L, v) => { L.letter = v; }, fmt: v => (v > 0 ? '+' : '') + v, cls: 'txt-only' });
+  slider($('#tLook'), { label: 'Interlineado', min: 70, max: 250, step: 1, get: L => Math.round((L.line || 1.2) * 100), set: (L, v) => { L.line = v / 100; }, fmt: v => (v / 100).toFixed(2), cls: 'txt-only' });
   section($('#tShadow'), {
     label: 'Sombra', key: 'shadow', build: b => {
       const s = sub.bind(null, 'shadow');
@@ -805,9 +885,10 @@ window.createMosaicoText = function createMosaicoText(A) {
     lock: '<svg viewBox="0 0 20 20"><rect x="4" y="9" width="12" height="8" rx="1.6"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>',
     unlock: '<svg viewBox="0 0 20 20"><rect x="4" y="9" width="12" height="8" rx="1.6"/><path d="M7 9V6.5a3 3 0 0 1 5.8-1"/></svg>',
     copy: '<svg viewBox="0 0 20 20"><rect x="7" y="7" width="10" height="10" rx="1.6"/><path d="M13 7V4.6A1.6 1.6 0 0 0 11.4 3H4.6A1.6 1.6 0 0 0 3 4.6v6.8A1.6 1.6 0 0 0 4.6 13H7"/></svg>',
+    img: '<svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="1.6"/><circle cx="7.5" cy="8.3" r="1.4"/><path d="M3.5 14.5l4.3-3.8 3 2.6 2.2-1.9 3.6 3.1"/></svg>',
     grip: '<svg viewBox="0 0 20 20"><path d="M7 5h.01M13 5h.01M7 10h.01M13 10h.01M7 15h.01M13 15h.01"/></svg>',
   };
-  const layerName = L => L.name || (L.text || '').split('\n')[0].trim().slice(0, 32) || 'Texto';
+  const layerName = L => L.name || (isImg(L) ? 'Imagen' : (L.text || '').split('\n')[0].trim().slice(0, 32) || 'Texto');
   let layerClip = (() => { try { return JSON.parse(localStorage.getItem('mosaico.layerClip')); } catch { return null; } })();
   function copyLayer(L) {
     if (!L) return;
@@ -841,7 +922,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       <div class="lp-row${L.id === sel ? ' on' : ''}${L.hidden ? ' hid' : ''}" data-id="${L.id}">
         <span class="lp-grip" title="Arrastrá para cambiar el orden">${IC.grip}</span>
         <button class="lp-ic" data-l="eye" title="${L.hidden ? 'Mostrar' : 'Ocultar'}">${L.hidden ? IC.eyeOff : IC.eye}</button>
-        <button class="lp-name" data-l="sel" title="Tocá para elegirla · doble toque para renombrar"><span class="lp-type">T</span>${escHtml(layerName(L))}</button>
+        <button class="lp-name" data-l="sel" title="Tocá para elegirla · doble toque para renombrar"><span class="lp-type">${isImg(L) ? IC.img : 'T'}</span>${escHtml(layerName(L))}</button>
         <button class="lp-ic${L.locked ? ' act' : ''}" data-l="lock" title="${L.locked ? 'Desbloquear' : 'Bloquear (no se mueve sin querer)'}">${L.locked ? IC.lock : IC.unlock}</button>
         <button class="lp-ic" data-l="copy" title="Copiar esta capa">${IC.copy}</button>
       </div>`).join('');
@@ -850,11 +931,12 @@ window.createMosaicoText = function createMosaicoText(A) {
       <div class="lp-head"><span>Capas</span>
         <div class="lp-actions">
           <button class="chip accent" data-l="addtext" id="addTextBtn" title="Agregar un texto">+ Texto</button>
+          <button class="chip accent" data-l="addimg" id="addImgBtn" title="Agregar una imagen (PNG, logo, firma…) como capa">+ Imagen</button>
           ${layerClip ? `<button class="chip" data-l="paste" title="Pegar la capa copiada">Pegar capa</button><button class="chip" data-l="pastemany" title="Pegar la capa copiada en varias publicaciones">Pegar en…</button>` : ''}
         </div></div>
       <div class="lp-list">${rows}</div>
       <div class="lp-row lp-bg${sel ? '' : ' on'}" data-l="bg"><span class="lp-grip"></span><span class="lp-ic"></span><span class="lp-name">${bgLabel}</span></div>
-      ${ts.length ? '' : '<p class="muted-s">Sumá capas con <b>+ Texto</b>. Después las ordenás arrastrando ⋮⋮, las ocultás con el ojo o las bloqueás con el candado.</p>'}`;
+      ${ts.length ? '' : '<p class="muted-s">Sumá capas con <b>+ Texto</b> o <b>+ Imagen</b>. Después las ordenás arrastrando ⋮⋮, las ocultás con el ojo o las bloqueás con el candado.</p>'}`;
     const list = lp.querySelector('.lp-list');
     if (window.Sortable && ts.length > 1) Sortable.create(list, {
       handle: '.lp-grip', animation: 140,
@@ -876,6 +958,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     const row = b.closest('.lp-row'), L = row && row.dataset.id ? (S.current.texts || []).find(x => x.id === row.dataset.id) : null;
     const act = b.dataset.l;
     if (act === 'addtext') return add();
+    if (act === 'addimg') return imgInput.click();
     if (act === 'paste') return pasteLayer();
     if (act === 'pastemany') return A.startSelect('layer');
     if (act === 'bg') return deselect();
@@ -909,7 +992,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     pointerDown, pointerMove, pointerUp, wheel, macGesture, dblclick, keydown,
     onItemChanged() { if (sel) select(null); },
     refresh() { if (sel && !cur()) select(null); else { syncPanel(); } renderLayers(); },
-    renderLayers, pasteLayerInto, hasLayerClip: () => !!layerClip, pasteLayer,
+    renderLayers, pasteLayerInto, addImageFiles, hasLayerClip: () => !!layerClip, pasteLayer,
     hasSelection: () => !!cur(),
     // selector de color y paleta compartida, para otros controles (p. ej. el fondo de una publicación vacía)
     colorPicker: opts => makePicker(opts),

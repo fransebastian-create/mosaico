@@ -494,3 +494,11 @@ body.dropping.has-current .dropzones {
 .dz.hot { border-color: var(--sel); background: color-mix(in srgb, var(--sel) 10%, var(--panel)); }
 .dz-note { text-align: center; color: var(--muted); font-size: 12px; margin: 0; pointer-events: none; }
 @media (max-width: 899px) { body.dropping.has-current .dropzones { display: none; } }
+
+/* capas de imagen: el panel muestra sólo lo que sirve para una imagen */
+#textPanel.img-mode > #tText, #textPanel.img-mode .tp-field, #textPanel.img-mode #tStroke, #textPanel.img-mode #tBg,
+#textPanel.img-mode .txt-only, #textPanel.img-mode > .hint, #textPanel:not(.img-mode) .img-only { display: none !important; }
+.lp-type svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; vertical-align: -2px; }
+.dz.main { flex: 1.4; max-height: 260px; border-color: color-mix(in srgb, var(--sel) 45%, var(--line)); }
+.dz-row { display: flex; gap: 14px; flex: 1; max-height: 160px; }
+.dz-row .dz { max-height: none; }

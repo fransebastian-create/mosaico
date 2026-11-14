@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Inter:wght@400;700&family=Playfair+Display:ital@0;1&display=swap">
-<link rel="stylesheet" href="styles.css?v=1.5.1">
+<link rel="stylesheet" href="styles.css?v=1.6">
 </head>
 <body>
 <div id="app">
@@ -61,6 +61,7 @@
       <div id="slideStrip" class="slides" hidden></div>
       <div class="row">
         <button id="photoBtn" class="chip" title="Poner o cambiar la foto (los textos y el color quedan)">Cambiar foto</button>
+        <button id="removePhotoBtn" class="chip" title="Sacar la foto de fondo y volver al fondo de color" hidden>Quitar foto</button>
         <button id="beforeBtn" class="chip" title="Mantené apretado para ver la foto sin ajustes">◐ Antes</button>
         <button id="copyBtn" class="chip" title="Copiar los ajustes de color (no las capas)">Copiar ajustes</button>
         <button id="pasteBtn" class="chip" disabled>Pegar</button>
@@ -91,11 +92,14 @@
       </div>
       <div id="sliders"></div>
       <div id="textPanel"></div>
-      <p class="hint">Arrastrá la foto para mover el recorte. Con dos dedos (o el trackpad) podés agrandar, achicar y girar. Doble clic en la foto la recentra; doble clic en un ajuste lo vuelve a cero. Las capas (textos) se suman desde el panel <b>Capas</b>. Para armar un carrusel, tocá <b>+ Diapositiva</b>.</p>
+      <p class="hint">Arrastrá la foto para mover el recorte. Con dos dedos (o el trackpad) podés agrandar, achicar y girar. Doble clic en la foto la recentra; doble clic en un ajuste lo vuelve a cero. Las capas (textos e imágenes) se suman desde el panel <b>Capas</b>. Para armar un carrusel, tocá <b>+ Diapositiva</b>.</p>
     </div>
     <div id="dropZones" class="dropzones">
-      <div class="dz" data-drop="photo"><b>Poner como foto</b><span>de esta publicación (los textos y el color quedan)</span></div>
-      <div class="dz" data-drop="slide"><b>Sumar al carrusel</b><span>como diapositivas nuevas de esta publicación</span></div>
+      <div class="dz main" data-drop="layer"><b>Como capa</b><span>encima de esta publicación (logo, firma, guion, PNG…)</span></div>
+      <div class="dz-row">
+        <div class="dz" data-drop="photo"><b>Como fondo</b><span>reemplaza la foto de atrás</span></div>
+        <div class="dz" data-drop="slide"><b>Sumar al carrusel</b><span>como diapositivas nuevas</span></div>
+      </div>
       <p class="dz-note">Para publicaciones nuevas, soltalas en la grilla</p>
     </div>
     <div class="editor-empty" id="editorEmpty">Elegí una foto de la grilla para editarla</div>
@@ -148,9 +152,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="config.js?v=1.5.1"></script>
-<script src="drive.js?v=1.5.1"></script>
-<script src="texto.js?v=1.5.1"></script>
-<script src="app.js?v=1.5.1"></script>
+<script src="config.js?v=1.6"></script>
+<script src="drive.js?v=1.6"></script>
+<script src="texto.js?v=1.6"></script>
+<script src="app.js?v=1.6"></script>
 </body>
 </html>

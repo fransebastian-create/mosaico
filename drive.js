@@ -335,6 +335,19 @@ window.createMosaicoSync = function createMosaicoSync(app) {
       await app.fonts.setDriveId(f.id, r.id);
     }
   }
+  // Imágenes de las capas (PNG, logos…): una vez por imagen, en archivos/. La capa guarda el id del archivo.
+  async function pushLayerImages(it) {
+    for (const L of it.texts || []) {
+      if (L.type !== 'image' || !L.img || L.fileId) continue;
+      const r = await app.layerImage(L.img);
+      if (r && r.fileId) { await app.setLayerFileId(L.img, r.fileId); continue; }
+      if (!r || !r.orig) continue;   // no está en este dispositivo (la subió otra persona y todavía no se bajó)
+      setPhase('syncing', 'Subiendo imagen de capa · ' + (L.name || ''));
+      const ext = /png/.test(r.orig.type) ? 'png' : /webp/.test(r.orig.type) ? 'webp' : 'jpg';
+      const up = await uploadNew({ name: `capa-${L.img}.${ext}`, parents: [st.project.archivosId], appProperties: { mosaicoRole: 'layerimg', mosaicoId: L.img } }, r.orig);
+      await app.setLayerFileId(L.img, up.id);
+    }
+  }
   async function pullFonts(full) {
     let q = `'${esc(st.project.archivosId)}' in parents and trashed=false and appProperties has { key='mosaicoRole' and value='font' }`;
     if (!full && st.lastPull) q += ` and modifiedTime > '${new Date(st.lastPull - 5000).toISOString()}'`;
@@ -425,6 +438,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
         app.persist(it);
       }
     }
+    await pushLayerImages(it);
     if (!s.media.orig && !blank) return;   // todavía no hay original local (p. ej. llegó de otra persona sin abrir)
     const doc = { ...metaFields(it), media: s.media, mediaRev: s.mediaRev || 0, updatedAt: Date.now(), updatedBy: st.user && st.user.email };
     if (!s.jsonId) {
@@ -582,6 +596,7 @@ window.createMosaicoSync = function createMosaicoSync(app) {
     state, onChange(f) { st.listeners.add(f); f(state()); return () => st.listeners.delete(f); },
     signIn, signOut, findProjects, createProject, openProject, leaveProject, renameProject, share, folderUrl,
     kick, fetchMedia, trashItem, syncNow: () => kick(0),
+    fetchFile: id => download(id, 60000),
     trashFile: id => { if (hasToken()) trash(id); },
     fromRedirect: back ? (back.error || 'ok') : null,   // volvimos recién de Google (celulares)
     _mergeOrder: mergeOrder, _putResumable: putResumable,
