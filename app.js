@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.6.7';
+  const VERSION = 'v1.6.8';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1401,11 +1401,12 @@
   });
 
   // eliminar
+  const unsyncedNote = it => (isPending(it) ? '\n\nOjo: tiene cambios que todavía no se subieron a Drive. Sólo quedan en este dispositivo (en “Eliminadas”).' : '');
   $('#deleteBtn').addEventListener('click', async () => {
     const it = S.current; if (!it) return;
     const lead = leaderOf(it), list = slidesOf(lead).map(x => x.id);
     if (list.length > 1) {   // diapositiva de un carrusel: sólo se va esa
-      if (!confirm('¿Quitar esta diapositiva del carrusel? (Las demás quedan. Esta queda en “Eliminadas” por 30 días.)')) return;
+      if (!confirm('¿Quitar esta diapositiva del carrusel? (Las demás quedan. Esta queda en “Eliminadas” por 30 días.)' + unsyncedNote(it))) return;
       const k = list.indexOf(it.id), rest = list.filter(id => id !== it.id);
       await toTrash(it, { sib: rest[0], k });
       setSlides(rest, lead.id);
@@ -1414,7 +1415,7 @@
       afterDelete();
       return;
     }
-    if (!confirm('¿Sacar esta publicación de la grilla? (Queda en “Eliminadas” por 30 días.)')) return;
+    if (!confirm('¿Sacar esta publicación de la grilla? (Queda en “Eliminadas” por 30 días.)' + unsyncedNote(it))) return;
     const idx = S.order.indexOf(it.id);
     await toTrash(it, { index: idx });
     S.order.splice(idx, 1); S.items.delete(it.id);
@@ -1980,6 +1981,26 @@
   const cloudBtn = $('#cloudBtn'), cloudLabel = $('#cloudLabel'), cloudSheet = $('#cloudSheet'), cloudBody = $('#cloudBody');
   let foundProjects = null, cloudBusy = '';
   const escHtml = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // ---- aviso fijo: Drive dejó de recibir los cambios ----
+  const isPending = it => { const st = Sync && Sync.state(), p = st && st.project; return !!p && (!it.sync || it.sync.project !== p.id || it.sync.dirty || it.sync.mediaDirty); };
+  function renderSyncBanner(st) {
+    const el = $('#syncBanner');
+    const bad = st && st.project && st.configured && (st.expired || st.phase === 'error');
+    if (!bad) { el.hidden = true; document.body.classList.remove('has-banner'); return; }
+    const n = [...S.items.values()].filter(isPending).length;
+    const what = n ? `${n} ${n === 1 ? 'publicación con cambios' : 'publicaciones con cambios'} sin subir a Drive` : 'Drive no está recibiendo los cambios';
+    $('#syncBannerText').textContent = st.expired
+      ? `⚠︎ Se venció la conexión con Google: ${what}. Están guardados sólo en este dispositivo.`
+      : `⚠︎ No se pudo sincronizar con Drive: ${what}. (${st.detail || 'error'})`;
+    $('#syncBannerBtn').textContent = st.expired ? 'Reconectar' : 'Reintentar';
+    el.hidden = false; el.classList.toggle('urgent', n > 0); document.body.classList.add('has-banner');
+  }
+  $('#syncBannerBtn').addEventListener('click', async () => {
+    const st = Sync && Sync.state(); if (!st) return;
+    if (!st.expired) { Sync.syncNow(); return; }
+    try { await Sync.signIn(); toast('Conectado: subiendo los cambios…'); }
+    catch (e) { toast('No se pudo reconectar: ' + (e.message || e), false, 6000); }
+  });
   function cloudChip(st) {
     cloudBtn.classList.remove('ok', 'warn', 'busy');
     if (!st.configured || (!st.signedIn && !st.expired)) { cloudLabel.textContent = 'Nube'; return; }
@@ -2168,7 +2189,8 @@
     if (Sync) return;
     if (!window.createMosaicoSync) { cloudBtn.hidden = true; return; }
     Sync = window.createMosaicoSync(appApi);
-    Sync.onChange(st => { renderCloud(st); renderProjects(); });
+    Sync.onChange(st => { renderCloud(st); renderProjects(); renderSyncBanner(st); });
+    setInterval(() => renderSyncBanner(Sync.state()), 15000);
     const pendOpen = WS.get('mosaico.pendingOpen.' + WS.cur.id), pendCreate = WS.get('mosaico.pendingCreate.' + WS.cur.id);
     if ((pendOpen || pendCreate) && !Sync.state().project) {
       if (Sync.state().signedIn) {
