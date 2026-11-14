@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.14';
+  const VERSION = 'v1.15';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1132,7 +1132,7 @@
     const s = source(it);
     const out = renderBase('preview', it, s, S.holdBefore ? null : it.adj, pv.width, pv.height, ASPECT);
     pctx.drawImage(out, 0, 0);
-    T.draw(pctx, it, pv.width, pv.height);
+    T.draw(pctx, it, pv.width, pv.height, { preview: true });
     T.afterPreview();
     const fw = baseF(it.w, it.h, it.crop.rot) / it.crop.z;
     $('#lowres').hidden = fw >= OUT_W * 0.75;

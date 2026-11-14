@@ -607,3 +607,8 @@ body.has-banner { --bh: 44px; }
   background: #2f6fdb; color: #fff; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.3); width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box; }
 .upd-pill[hidden] { display: none; }
 .upd-pill .btn { background: #fff; color: #111; border: 0; padding: 6px 12px; flex: none; }
+
+/* acomodar la foto dentro del recorte */
+#textPanel:not(.fitting) .fit-only { display: none !important; }
+.fit-hint { margin: 2px 0 8px; font-size: 12px; line-height: 1.4; color: var(--muted); }
+#tFit.on { background: var(--sel, #3b82f6); color: #fff; border-color: transparent; }

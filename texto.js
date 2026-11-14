@@ -255,6 +255,26 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   // Recorte: qué fracción de la imagen se saca de cada lado (0 = nada).
   const cropOf = L => ({ l: L.cl || 0, r: L.cr || 0, t: L.ct || 0, b: L.cb || 0 });
+  // "Acomodar la foto": el recorte queda quieto y la foto se mueve / agranda adentro
+  let fitId = null;
+  const fitting = L => !!L && L.type === 'image' && fitId === L.id && !L.locked;
+  function fitDims(L) { const FW = L.size * (L.ar || 1) * (L.sx || 1), FH = L.size * (L.sy || 1), c = cropOf(L); return { FW, FH, c, w: FW * (1 - c.l - c.r), h: FH * (1 - c.t - c.b) }; }
+  function setCrop(L, c) { for (const k of ['l', 'r', 't', 'b']) { const v = Math.max(0, c[k]); if (v > 1e-6) L['c' + k] = v; else delete L['c' + k]; } }
+  const fitZoom = L => { const d = fitDims(L); return Math.min(d.FW / d.w, d.FH / d.h); };   // 1 = la foto justo cubre el recorte
+  function fitScale(L, k) {
+    const d = fitDims(L), z = Math.min(d.FW / d.w, d.FH / d.h);
+    k = clamp(k, 1 / z, 10 / z);
+    const cx = d.c.l + (1 - d.c.l - d.c.r) / 2, cy = d.c.t + (1 - d.c.t - d.c.b) / 2;   // el punto de la foto que está en el centro del recorte no se mueve
+    const fx = d.w / (d.FW * k) / 2, fy = d.h / (d.FH * k) / 2;
+    let l = cx - fx, r = 1 - cx - fx, t = cy - fy, b = 1 - cy - fy;
+    if (l < 0) { r += l; l = 0; } if (r < 0) { l += r; r = 0; } if (t < 0) { b += t; t = 0; } if (b < 0) { t += b; b = 0; }
+    L.size *= k; setCrop(L, { l, r, t, b });
+  }
+  function fitPan(L, dx, dy) {   // dx, dy: cuánto se arrastró en la pantalla (unidades del alto)
+    const d = fitDims(L), a = -rad(L.rot || 0), lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a);
+    const u = clamp(lx / d.FW, -d.c.r, d.c.l), v = clamp(ly / d.FH, -d.c.b, d.c.t);
+    setCrop(L, { l: d.c.l - u, r: d.c.r + u, t: d.c.t - v, b: d.c.b + v });
+  }
   // ---------------- formas (rectángulo con bordes redondeables y elipse) ----------------
   // L.size = alto (fracción del alto de la publicación), L.ar = ancho / alto, L.radius = redondeo (0 a 1)
   function shapePath(ctx, L, w, h) {
@@ -339,7 +359,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     fxCache.set(L.id, { key, c });
     return c;
   }
-  function drawImageLayer(ctx, L, x0, H) {
+  function drawImageLayer(ctx, L, x0, H, preview) {
     const W = H * ASPECT, e = imageOf(L);
     const ar = L.ar || (e.w ? e.w / e.h : 1), c = cropOf(L);
     const h = L.size * H * (L.sy || 1) * (1 - c.t - c.b), w = L.size * H * ar * (L.sx || 1) * (1 - c.l - c.r);
@@ -353,6 +373,12 @@ window.createMosaicoText = function createMosaicoText(A) {
     setShadow(ctx, L, h * 0.35);
     ctx.imageSmoothingQuality = 'high';
     const src = layerFx(L, e) || e.img, sw = src === e.img ? e.w : src.width, shh = src === e.img ? e.h : src.height;
+    if (preview && fitting(L)) {   // mientras se acomoda: la foto entera, tenue, para ver qué queda afuera
+      const FW = w / (1 - c.l - c.r), FH = h / (1 - c.t - c.b);
+      ctx.save(); ctx.globalAlpha *= 0.3; ctx.shadowColor = 'transparent';
+      ctx.drawImage(src, -w / 2 - c.l * FW, -h / 2 - c.t * FH, FW, FH);
+      ctx.restore();
+    }
     const sx0 = c.l * sw, sy0 = c.t * shh, sw1 = (1 - c.l - c.r) * sw, sh1 = (1 - c.t - c.b) * shh;
     if (L.cshape === 'ellipse') {   // recorte circular: se recorta en otra hoja y después se pega (así la sombra sigue el círculo)
       const k = Math.min(1, 2048 / Math.max(w, h)), ow = Math.max(1, Math.round(w * k)), oh = Math.max(1, Math.round(h * k));
@@ -399,13 +425,13 @@ window.createMosaicoText = function createMosaicoText(A) {
   // Modos de fusión (como en Photoshop). La clave es el nombre que entiende el navegador.
   const BLENDS = { 'source-over': 'Normal', multiply: 'Multiplicar', screen: 'Trama', overlay: 'Superponer', 'soft-light': 'Luz suave', 'hard-light': 'Luz fuerte', darken: 'Oscurecer', lighten: 'Aclarar', difference: 'Diferencia' };
   // Dibuja todas las capas de una publicación en un lienzo de ow×oh (4:5 o miniatura 3:4).
-  function draw(ctx, it, ow, oh) {
+  function draw(ctx, it, ow, oh, opts = {}) {
     if (!it || !it.texts || !it.texts.length) return;
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const x0 = (ow - oh * ASPECT) / 2;
     for (const L of it.texts) {
-      if (L.type === 'image') { drawImageLayer(ctx, L, x0, oh); continue; }
+      if (L.type === 'image') { drawImageLayer(ctx, L, x0, oh, opts.preview); continue; }
       if (L.type === 'shape') { drawShape(ctx, L, x0, oh); continue; }
       if (L.hidden) { if (!L._box) { const m = layout(ctx, L, oh); L._box = { w: m.maxW * (L.sx || 1) / oh, h: m.h * (L.sy || 1) / oh }; } continue; }
       drawText(ctx, L, x0, oh);
@@ -452,6 +478,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     setSel(multi.has(id) ? id : [...multi].pop());
   }
   function setSel(id) {
+    if (id !== fitId) fitId = null;
     sel = id;
     if (!id) { multi.clear(); pickMany = false; }
     document.body.classList.toggle('text-mode', !!id);
@@ -614,6 +641,12 @@ window.createMosaicoText = function createMosaicoText(A) {
       const dx = sx ? 0.5 - (g.bb0.l + g.bb0.r) / 2 : g.dx, dy = sy ? 0.5 - (g.bb0.t + g.bb0.b) / 2 : g.dy;
       for (const m of g.grp) { m.L.x = clamp(m.x + dx, 0, 1); m.L.y = clamp(m.y + dy, 0, 1); }
       snapV.classList.toggle('on', sx); snapH.classList.toggle('on', sy);
+      changed(); syncPanelValues();
+      return true;
+    }
+    if (fitting(L)) {   // acomodando: se mueve / agranda la foto adentro del recorte
+      fitPan(L, (after.x - before.x) / rect.height, (after.y - before.y) / rect.height);
+      if (g.ptrs.size >= 2 && before.d > 0) fitScale(L, after.d / before.d);
       changed(); syncPanelValues();
       return true;
     }
@@ -810,6 +843,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   function wheel(e) {
     const L = cur(); if (!L || L.locked || isMulti()) return false;
     e.preventDefault();
+    if (fitting(L)) { fitScale(L, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))); changed(); syncPanelValues(); return true; }
     L.size = clamp(L.size * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), 0.012, maxSize(L));
     changed(); syncPanelValues();
     return true;
@@ -820,6 +854,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     e.preventDefault();
     if (type === 'start') mg = { scale: 1, rotation: 0, L, tw: { acc: 0, on: false, start: L.rot || 0 } };
     else if (type === 'change' && mg) {
+      if (fitting(mg.L)) { fitScale(mg.L, e.scale / mg.scale); mg.scale = e.scale; changed(); syncPanelValues(); return true; }
       mg.L.size = clamp(mg.L.size * e.scale / mg.scale, 0.012, maxSize(mg.L)); mg.scale = e.scale;
       mg.tw.acc += e.rotation - mg.rotation; mg.rotation = e.rotation;
       if (mg.tw.on || Math.abs(mg.tw.acc) >= 5) { mg.tw.on = true; mg.L.rot = snapRot(normRot(mg.tw.start + mg.tw.acc)); }
@@ -1117,6 +1152,20 @@ window.createMosaicoText = function createMosaicoText(A) {
     const row = document.createElement('div'); row.className = 'tp-row img-only';
     row.innerHTML = `<span>Recorte</span><div class="seg" id="tCropKind"><button data-v="rect">▭ Rectangular</button><button data-v="ellipse">◯ Circular</button></div>`;
     $('#tSizeRot').append(row);
+    const fitRow = document.createElement('div'); fitRow.className = 'row img-only';
+    fitRow.innerHTML = `<button class="chip" id="tFit" title="El recorte queda quieto: arrastrá la foto y agrandala o achicala adentro">Acomodar la foto</button>`;
+    $('#tSizeRot').append(fitRow);
+    const fitBtn = fitRow.querySelector('#tFit');
+    fitBtn.addEventListener('click', () => { const L = cur(); if (!L) return; fitId = fitting(L) ? null : L.id; syncPanel(); A.requestRender(); });
+    refreshers.push(L => {
+      const on = fitting(L);
+      fitBtn.classList.toggle('on', on); fitBtn.textContent = on ? '✓ Listo, terminé de acomodar' : 'Acomodar la foto';
+      panel.classList.toggle('fitting', on);
+    });
+    const hint = document.createElement('p'); hint.className = 'fit-hint fit-only';
+    hint.textContent = 'Arrastrá la foto para elegir qué parte se ve. Con el zoom, la rueda del mouse o dos dedos la agrandás o achicás. El recorte no se mueve.';
+    $('#tSizeRot').append(hint);
+    slider($('#tSizeRot'), { label: 'Zoom de la foto', min: 100, max: 1000, get: L => Math.round(fitZoom(L) * 100), set: (L, v) => fitScale(L, (v / 100) / fitZoom(L)), fmt: v => v + '%', cls: 'img-only fit-only' });
     const seg = row.querySelector('.seg');
     seg.addEventListener('click', e => {
       const b = e.target.closest('[data-v]'), L = cur(); if (!b || !L) return;
