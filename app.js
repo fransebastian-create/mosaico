@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.18';
+  const VERSION = 'v1.19';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -135,7 +135,7 @@
   };
 
   const cleanTexts = ts => (ts || []).map(({ _box, ...L }) => L);
-  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, parent: it.parent, slides: it.slides, archived: it.archived, archivedPos: it.archivedPos, sync: it.sync || null });
+  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, veil: it.veil, vin: it.vin, vout: it.vout, parent: it.parent, slides: it.slides, archived: it.archived, archivedPos: it.archivedPos, sync: it.sync || null });
   let Sync = null;   // sincronización con Google Drive (drive.js)
   let Backup = null;   // copia automática en una carpeta (más abajo)
   let Hist = null;     // deshacer / rehacer de cada publicación (más abajo)
@@ -612,6 +612,8 @@
     if (it.kind !== 'video' || !it.veil) return;
     cx.save(); cx.setTransform(1, 0, 0, 1, 0, 0); cx.globalAlpha = clamp(it.veil / 100, 0, 1) * 0.85; cx.fillStyle = '#000'; cx.fillRect(0, 0, w, h); cx.restore();
   }
+  // pedazo del video que se usa (Cortar video): de vin a vout, en segundos
+  const trimOf = it => { const d = it.duration || 0, a = clamp(it.vin || 0, 0, d), b = clamp(it.vout ?? d, a, d); return { a, b: b > a ? b : d }; };
   const vidPlaying = () => !!(S.video && S.video.v && !S.video.v.paused);
   function videoSource(it) {
     if (S.video && S.video.id === it.id && S.video.v.videoWidth) {
@@ -980,7 +982,8 @@
     syncControls(); updateTitle(); fitFrame(); requestRender();
     Hist.base(it);
     const isVid = it.kind === 'video';
-    $('#frameRow').hidden = !isVid; $('#vidCtl').hidden = !isVid;
+    $('#frameRow').hidden = !isVid; $('#vidCtl').hidden = !isVid; $('#trimRow').hidden = !isVid;
+    if (isVid) renderTrim();
     document.body.classList.toggle('is-video', isVid);
     syncVidUI();
     if (isVid) {
@@ -1017,6 +1020,7 @@
         if (S.current !== it) { closeVideo(v); return; }
         S.video = { id, v, it, dirty: false };
         requestRender();
+        buildStrip(it, vblob);
         vidPlay();   // el video de fondo arranca solo (sin sonido, salvo que lo hayas prendido)
       }
     } catch (e) { console.error(e); toast((isVid ? 'No se pudo abrir el video: ' : 'No se pudo abrir el original: ') + (e.message || e), false, 8000); }
@@ -1031,13 +1035,15 @@
   let vidGen = 0;
   function vidLoop(gen) {   // mientras corre, se redibuja sólo la vista (la miniatura queda con la portada)
     if (gen !== vidGen || !vidPlaying()) return;
-    drawPreview();
+    { const v = S.video.v, { a, b } = trimOf(S.video.it); if (v.currentTime >= b - 0.03 || v.currentTime < a - 0.1) v.currentTime = a; }   // sólo corre el pedazo elegido
+    drawPreview(); trimPlayhead();
     const v = S.video.v, next = () => vidLoop(gen);
     if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(next); else requestAnimationFrame(next);
   }
   async function vidPlay() {
     const vs = S.video; if (!vs) return;
     const v = vs.v; v.loop = true; v.muted = !vidSound;
+    { const { a, b } = trimOf(vs.it); if (v.currentTime < a || v.currentTime >= b - 0.03) v.currentTime = a; }
     try { await v.play(); }
     catch { if (!v.muted) { v.muted = true; try { await v.play(); } catch { } } }   // el navegador no deja sonido sin un toque: arranca mudo
     vidLoop(++vidGen);
@@ -1060,6 +1066,77 @@
   });
   document.addEventListener('visibilitychange', () => { if (document.hidden && vidPlaying()) vidPause(); });
 
+  // ---- cortar el video: tira de fotogramas con dos manijas (no se toca el archivo, sólo se guarda desde / hasta) ----
+  const trimEl = $('#trim'), stripC = $('#trimStrip'), stripCache = new Map();
+  const fmtCut = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')},${Math.floor((t % 1) * 10)}`;
+  async function buildStrip(it, vblob) {
+    if (stripCache.has(it.id)) { renderTrim(); return; }
+    const N = 10, CW = 96, CH = 120, oc = canvas(N * CW, CH), o = oc.getContext('2d');
+    stripCache.set(it.id, null);
+    let v2 = null;
+    try {
+      v2 = await openVideo(vblob);
+      for (let i = 0; i < N; i++) {
+        if (S.current !== it) { stripCache.delete(it.id); return; }
+        await seekVideo(v2, (i + 0.5) / N * (it.duration || v2.duration || 0));
+        const vw = v2.videoWidth, vh = v2.videoHeight, k = Math.max(CW / vw, CH / vh);
+        o.save(); o.beginPath(); o.rect(i * CW, 0, CW, CH); o.clip();   // que el cuadro no se pase al de al lado
+        o.drawImage(v2, i * CW + (CW - vw * k) / 2, (CH - vh * k) / 2, vw * k, vh * k);
+        o.restore();
+        stripCache.set(it.id, oc); renderTrim();
+      }
+    } catch (e) { console.error(e); stripCache.delete(it.id); }
+    finally { if (v2) closeVideo(v2); }
+  }
+  function renderTrim() {
+    const it = S.current; if (!it || it.kind !== 'video') return;
+    const d = it.duration || 1, { a, b } = trimOf(it), pa = a / d * 100, pb = b / d * 100;
+    trimEl.style.setProperty('--a', pa + '%'); trimEl.style.setProperty('--b', pb + '%');
+    $('#trimOut').textContent = `${fmtCut(a)} → ${fmtCut(b)}  (${(b - a).toFixed(1).replace('.', ',')} s)`;
+    const dpr = window.devicePixelRatio || 1, w = Math.round(stripC.clientWidth * dpr), h = Math.round(stripC.clientHeight * dpr);
+    if (!w || !h) return;
+    if (stripC.width !== w || stripC.height !== h) { stripC.width = w; stripC.height = h; }
+    const x = stripC.getContext('2d'), src = stripCache.get(it.id);
+    x.fillStyle = '#2a2a2a'; x.fillRect(0, 0, w, h);
+    if (src) x.drawImage(src, 0, 0, w, h);
+    trimPlayhead();
+  }
+  function trimPlayhead() {
+    const it = S.current, ph = trimEl.querySelector('.trim-ph');
+    if (!it || it.kind !== 'video' || !S.video || S.video.id !== it.id) { ph.hidden = true; return; }
+    ph.hidden = false; ph.style.left = (S.video.v.currentTime / (it.duration || 1) * 100) + '%';
+  }
+  new ResizeObserver(() => renderTrim()).observe(trimEl);
+  let tg = null;
+  trimEl.querySelectorAll('.trim-h').forEach(h => {
+    const isIn = h.classList.contains('in');
+    h.addEventListener('pointerdown', e => {
+      const it = S.current; if (!it || !S.video || S.video.id !== it.id) return;
+      e.preventDefault(); e.stopPropagation();
+      try { h.setPointerCapture(e.pointerId); } catch { }
+      tg = { id: e.pointerId, it, was: vidPlaying() };
+      if (tg.was) vidPause();
+      h.classList.add('on');
+    });
+    h.addEventListener('pointermove', e => {
+      if (!tg || tg.id !== e.pointerId) return;
+      const it = tg.it, d = it.duration || 0, r = stripC.getBoundingClientRect();
+      const t = clamp((e.clientX - r.left) / r.width, 0, 1) * d, { a, b } = trimOf(it), MIN = Math.min(0.5, d);
+      if (isIn) { it.vin = clamp(t, 0, b - MIN); if (it.vin < 0.01) delete it.vin; }
+      else { it.vout = clamp(t, a + MIN, d); if (it.vout > d - 0.01) delete it.vout; }
+      renderTrim(); scrubTo(isIn ? trimOf(it).a : Math.max(trimOf(it).a, trimOf(it).b - 0.04));   // la vista muestra el cuadro donde cortás
+    });
+    const end = e => {
+      if (!tg || tg.id !== e.pointerId) return;
+      const { it, was } = tg; tg = null; h.classList.remove('on');
+      saveItem(it);
+      const { a, b } = trimOf(it);
+      if ((it.t || 0) < a || (it.t || 0) > b) setFrameTime(clamp(it.t || 0, a, b));   // la portada tiene que estar dentro del pedazo
+      if (was) { const go = async () => { while (seeking) await new Promise(r => setTimeout(r, 30)); if (S.video && S.video.it === it) { S.video.v.currentTime = a; vidPlay(); } }; go(); }
+    };
+    h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end);
+  });
+
   const frameInput = $('#frameInput'), frameOut = $('#frameOut');
   let seeking = false, pendingT = null, commitTimer, frameGen = 0;
   async function scrubTo(t) {
@@ -1078,7 +1155,7 @@
     const it = S.current;
     if (!it || it.kind !== 'video' || !S.video || S.video.id !== it.id) return;
     if (vidPlaying()) vidPause();
-    it.t = clamp(t, 0, it.duration || 0);
+    { const { a, b } = trimOf(it); it.t = clamp(t, a, b); }
     frameInput.value = it.duration ? Math.round(it.t / it.duration * 1000) : 0;
     frameOut.textContent = fmtTime(it.t);
     frameGen++;
@@ -1094,7 +1171,11 @@
     while (seeking && S.video === vs) await new Promise(r => setTimeout(r, 50));
     if (gen !== frameGen && S.video === vs) return;     // se volvió a mover la barra: esperar al próximo
     try {
-      const fr = await grabFrame(vs.v);
+      // si el video siguió corriendo, volver un momento al cuadro de la portada para sacarle la foto
+      const v = vs.v, was = !v.paused, back = v.currentTime;
+      if (was || Math.abs(v.currentTime - (vs.it.t || 0)) > 0.02) { v.pause(); await seekVideo(v, vs.it.t || 0); }
+      const fr = await grabFrame(v);
+      if (was && S.video === vs) { v.currentTime = back; vidPlay(); }
       if (gen !== frameGen && S.video === vs) return;
       await DB.put('blobs', { id: vs.id, orig: fr.orig, thumb: fr.thumb });
       vs.dirty = false;
@@ -2536,7 +2617,7 @@
       for (const k of ['parent', 'slides']) { if (m[k] == null) delete it[k]; else it[k] = m[k]; }
       if (JSON.stringify([it.parent, it.slides]) !== famBefore) { renderGridSoon(); if (S.current) { renderStrip(); updateTitle(); } }
       const wasArch = !!it.archived;
-      for (const k of ['archived', 'archivedPos']) { if (m[k] == null) delete it[k]; else it[k] = m[k]; }
+      for (const k of ['archived', 'archivedPos', 'veil', 'vin', 'vout']) { if (m[k] == null) delete it[k]; else it[k] = m[k]; }
       if (wasArch !== !!it.archived) {
         if (!it.archived && !isChild(it) && !S.order.includes(it.id)) { S.order.splice(clamp(it.archivedPos ?? 0, 0, S.order.length), 0, it.id); ensureThumb(it); }
         renderGridSoon(); if (!archSheet.hidden) openArchive();

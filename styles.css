@@ -618,3 +618,22 @@ body.has-banner { --bh: 44px; }
 body.is-video #sliders .slider.veil { display: block; }
 body.is-video #sliders .slider:not(.exposure):not(.contrast):not(.saturation):not(.veil) { display: none; }
 #textPanel.shape-mode:not(.is-line) .no-fillshape { display: none !important; }
+
+/* cortar video: tira de fotogramas con dos manijas */
+.trim-row { padding: 4px 0 12px; border-bottom: 1px solid var(--line); }
+.trim-row[hidden] { display: none; }
+.trim-lbl { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+.trim-lbl output { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.trim { --a: 0%; --b: 100%; position: relative; height: 48px; margin: 0 12px; touch-action: none; user-select: none; }
+.trim canvas { width: 100%; height: 100%; display: block; border-radius: 6px; }
+.trim-shade { position: absolute; top: 0; bottom: 0; background: rgba(0,0,0,.62); pointer-events: none; }
+.trim-shade.l { left: 0; width: var(--a); border-radius: 6px 0 0 6px; }
+.trim-shade.r { left: var(--b); right: 0; border-radius: 0 6px 6px 0; }
+.trim-sel { position: absolute; top: -3px; bottom: -3px; left: var(--a); width: calc(var(--b) - var(--a)); border: 3px solid #ffd34d; border-left-width: 0; border-right-width: 0; pointer-events: none; }
+.trim-h { position: absolute; top: -3px; bottom: -3px; width: 14px; background: #ffd34d; pointer-events: auto; cursor: ew-resize; touch-action: none; }
+.trim-h.in { left: -14px; border-radius: 6px 0 0 6px; } .trim-h.out { right: -14px; border-radius: 0 6px 6px 0; }
+.trim-h::after { content: ""; position: absolute; left: 5px; right: 5px; top: 35%; bottom: 35%; border-radius: 2px; background: rgba(0,0,0,.45); }
+.trim-h.on { background: #ffe58a; }
+.trim-ph { position: absolute; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 2px rgba(0,0,0,.8); pointer-events: none; }
+.trim-ph[hidden] { display: none; }
+@media (pointer: coarse) { .trim { height: 56px; margin: 0 18px; } .trim-h { width: 20px; } .trim-h.in { left: -20px; } .trim-h.out { right: -20px; } }
