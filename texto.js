@@ -323,6 +323,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       if (L.fill !== false) ctx.shadowColor = 'transparent';
       ctx.lineWidth = Math.max(1, (st.width ?? 0.3) * 0.1 * Math.min(w, h));
       ctx.strokeStyle = st.color || '#000000'; ctx.lineJoin = 'round';
+      ctx.globalAlpha = clamp(st.opacity ?? L.opacity ?? 1, 0, 1);   // el borde tiene su propia opacidad
       ctx.stroke();
     }
     ctx.restore();
@@ -1187,7 +1188,8 @@ window.createMosaicoText = function createMosaicoText(A) {
     slider($('#tSizeRot'), { label, min: 0, max: 980, get: L => Math.round((L['c' + side] || 0) * 1000), set: cropSet(side), fmt: pctCrop, cls: 'img-only' });
   slider($('#tSizeRot'), { label: 'Giro', min: -180, max: 180, step: 0.5, get: L => L.rot || 0, set: (L, v) => { L.rot = snapRot(v); }, fmt: v => (Math.abs(v) < 0.05 ? '0' : v > 0 ? '+' + v : v) + '°' });
   slider($('#tLook'), { label: 'Grosor', min: -100, max: 100, get: L => L.weight || 0, set: (L, v) => { L.weight = v; }, fmt: v => (v > 0 ? '+' : '') + v, cls: 'txt-only' });
-  slider($('#tLook'), { label: 'Opacidad', min: 5, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct });
+  slider($('#tLook'), { label: 'Opacidad', min: 5, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct, cls: 'no-fillshape' });
+  slider($('#tLook'), { label: 'Opacidad del relleno', min: 0, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct, cls: 'shape-only no-line' });
   {
     const row = document.createElement('label'); row.className = 'tp-color tp-blend';
     row.innerHTML = `<span>Fusión</span><select aria-label="Modo de fusión">${Object.entries(BLENDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>`;
@@ -1219,6 +1221,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     label: 'Borde', key: 'stroke', build: b => {
       const s = sub.bind(null, 'stroke');
       slider(b, { label: 'Ancho del borde', min: 2, max: 100, ...wrap(s('width', 0.3), 100), fmt: pct });
+      slider(b, { label: 'Opacidad del borde', min: 0, max: 100, get: L => Math.round(((L.stroke && L.stroke.opacity) ?? L.opacity ?? 1) * 100), set: (L, v) => { L.stroke = { ...clone(DEFAULT.stroke), ...(L.stroke || {}), opacity: v / 100 }; }, fmt: pct });
       colorInput(b, { label: 'Color del borde', ...s('color', '#000000') });
     },
   });
