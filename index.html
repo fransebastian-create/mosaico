@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Inter:wght@400;700&family=Playfair+Display:ital@0;1&display=swap">
-<link rel="stylesheet" href="styles.css?v=1.15">
+<link rel="stylesheet" href="styles.css?v=1.16">
 </head>
 <body>
 <div id="updPill" class="upd-pill" hidden><span id="updText">Hay una versión nueva de Mosaico</span><button id="updBtn" class="btn">Actualizar</button></div>
@@ -82,6 +82,10 @@
       </div>
       <div id="layersPanel"></div>
       <div class="tp-field bg-row" id="bgRow"><span>Fondo</span><div class="swatches" id="bgColors"></div></div>
+      <div class="row vid-ctl" id="vidCtl" hidden>
+        <button id="vidPlay" class="chip" title="Reproducir o pausar el video de fondo">▶ Reproducir</button>
+        <button id="vidSound" class="chip" title="Prender o apagar el sonido del video">🔇 Sin sonido</button>
+      </div>
       <div class="slider frame-row" id="frameRow" hidden>
         <label><span>Fotograma de portada</span><output id="frameOut">0:00</output></label>
         <div class="frame-ctl">
@@ -198,9 +202,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="config.js?v=1.15"></script>
-<script src="drive.js?v=1.15"></script>
-<script src="texto.js?v=1.15"></script>
-<script src="app.js?v=1.15"></script>
+<script src="config.js?v=1.16"></script>
+<script src="drive.js?v=1.16"></script>
+<script src="texto.js?v=1.16"></script>
+<script src="app.js?v=1.16"></script>
 </body>
 </html>

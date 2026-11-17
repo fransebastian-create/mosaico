@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.15';
+  const VERSION = 'v1.16';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -607,6 +607,12 @@
     return it.cell;
   }
   // Si el video de esta publicación está abierto, se dibuja directo desde el video.
+  // Oscurecer (sólo fondos de video): un velo negro encima del video, debajo de las capas
+  function applyVeil(cx, it, w, h) {
+    if (it.kind !== 'video' || !it.veil) return;
+    cx.save(); cx.setTransform(1, 0, 0, 1, 0, 0); cx.globalAlpha = clamp(it.veil / 100, 0, 1) * 0.85; cx.fillStyle = '#000'; cx.fillRect(0, 0, w, h); cx.restore();
+  }
+  const vidPlaying = () => !!(S.video && S.video.v && !S.video.v.paused);
   function videoSource(it) {
     if (S.video && S.video.id === it.id && S.video.v.videoWidth) {
       const v = S.video.v;
@@ -618,7 +624,8 @@
     if (!it.thumb || !R || (!it.canvas && !it.stripCanvas)) return;
     if (!it.canvas) it.canvas = canvas(1, 1);   // diapositiva de un carrusel: sólo se ve en la tira
     const cw = 360, ch = Math.round(cw / S.gridAspect);
-    const vs = videoSource(it);
+    // la miniatura de la grilla muestra la portada, no el cuadro donde está corriendo el video
+    const vs = S.video && S.video.id === it.id && (vidPlaying() || Math.abs(S.video.v.currentTime - (it.t || 0)) > 0.05) ? null : videoSource(it);
     const src = vs || { img: it.thumb, w: it.thumb.naturalWidth, h: it.thumb.naturalHeight };
     const adj = S.showOriginalGrid ? null : it.adj;
     const out = it === S.current ? renderBase('thumb', it, src, adj, cw, ch, S.gridAspect) : R.render(src.img, src.w, src.h, it.crop, adj, cw, ch, S.gridAspect);
@@ -626,6 +633,7 @@
     if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
     const cx = c.getContext('2d');
     cx.drawImage(out, 0, 0);
+    applyVeil(cx, it, cw, ch);
     T.draw(cx, it, cw, ch);
     const sc = it.stripCanvas;
     if (sc) {
@@ -972,7 +980,9 @@
     syncControls(); updateTitle(); fitFrame(); requestRender();
     Hist.base(it);
     const isVid = it.kind === 'video';
-    $('#frameRow').hidden = !isVid;
+    $('#frameRow').hidden = !isVid; $('#vidCtl').hidden = !isVid;
+    document.body.classList.toggle('is-video', isVid);
+    syncVidUI();
     if (isVid) {
       frameInput.value = it.duration ? Math.round((it.t || 0) / it.duration * 1000) : 0;
       frameOut.textContent = fmtTime(it.t || 0);
@@ -1007,6 +1017,7 @@
         if (S.current !== it) { closeVideo(v); return; }
         S.video = { id, v, it, dirty: false };
         requestRender();
+        vidPlay();   // el video de fondo arranca solo (sin sonido, salvo que lo hayas prendido)
       }
     } catch (e) { console.error(e); toast((isVid ? 'No se pudo abrir el video: ' : 'No se pudo abrir el original: ') + (e.message || e), false, 8000); }
   }
@@ -1014,6 +1025,41 @@
   // ---- elegir fotograma de portada ----
   // Mientras el video está abierto, la vista y la miniatura salen directo del video.
   // El fotograma se guarda (liviano, sin tocar el video) cuando dejás de mover la barra.
+  // ---- video de fondo: corre en el editor (en loop) con las capas encima ----
+  let vidSound = false;
+  try { vidSound = localStorage.getItem('mosaico.vidSound') === '1'; } catch { }
+  let vidGen = 0;
+  function vidLoop(gen) {   // mientras corre, se redibuja sólo la vista (la miniatura queda con la portada)
+    if (gen !== vidGen || !vidPlaying()) return;
+    drawPreview();
+    const v = S.video.v, next = () => vidLoop(gen);
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(next); else requestAnimationFrame(next);
+  }
+  async function vidPlay() {
+    const vs = S.video; if (!vs) return;
+    const v = vs.v; v.loop = true; v.muted = !vidSound;
+    try { await v.play(); }
+    catch { if (!v.muted) { v.muted = true; try { await v.play(); } catch { } } }   // el navegador no deja sonido sin un toque: arranca mudo
+    vidLoop(++vidGen);
+    syncVidUI();
+  }
+  function vidPause() { if (S.video) S.video.v.pause(); syncVidUI(); requestRender(); }
+  function syncVidUI() {
+    const play = $('#vidPlay'), snd = $('#vidSound'); if (!play) return;
+    const on = vidPlaying(), muted = !S.video || S.video.v.muted;
+    play.textContent = on ? '❚❚ Pausa' : '▶ Reproducir';
+    snd.textContent = muted ? '🔇 Sin sonido' : '🔊 Con sonido';
+    snd.classList.toggle('on', !muted);
+  }
+  $('#vidPlay').addEventListener('click', () => { if (vidPlaying()) vidPause(); else vidPlay(); });
+  $('#vidSound').addEventListener('click', () => {
+    vidSound = !(S.video ? !S.video.v.muted : vidSound);
+    try { localStorage.setItem('mosaico.vidSound', vidSound ? '1' : '0'); } catch { }
+    if (S.video) { S.video.v.muted = !vidSound; if (!vidPlaying()) vidPlay(); }
+    syncVidUI();
+  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && vidPlaying()) vidPause(); });
+
   const frameInput = $('#frameInput'), frameOut = $('#frameOut');
   let seeking = false, pendingT = null, commitTimer, frameGen = 0;
   async function scrubTo(t) {
@@ -1031,6 +1077,7 @@
   function setFrameTime(t) {
     const it = S.current;
     if (!it || it.kind !== 'video' || !S.video || S.video.id !== it.id) return;
+    if (vidPlaying()) vidPause();
     it.t = clamp(t, 0, it.duration || 0);
     frameInput.value = it.duration ? Math.round(it.t / it.duration * 1000) : 0;
     frameOut.textContent = fmtTime(it.t);
@@ -1132,6 +1179,7 @@
     const s = source(it);
     const out = renderBase('preview', it, s, S.holdBefore ? null : it.adj, pv.width, pv.height, ASPECT);
     pctx.drawImage(out, 0, 0);
+    if (!S.holdBefore) applyVeil(pctx, it, pv.width, pv.height);
     T.draw(pctx, it, pv.width, pv.height, { preview: true });
     T.afterPreview();
     const fw = baseF(it.w, it.h, it.crop.rot) / it.crop.z;
@@ -1339,6 +1387,20 @@
     sliderUI[a.key] = { inp, out };
     $('#sliders').append(row);
   }
+  {   // Oscurecer: sólo en los fondos de video
+    const row = document.createElement('div');
+    row.className = 'slider veil';
+    row.innerHTML = `<label><span>Oscurecer</span><output>0</output></label><input type="range" min="0" max="100" step="1" value="0" aria-label="Oscurecer">`;
+    const inp = row.querySelector('input'), out = row.querySelector('output');
+    inp.addEventListener('input', () => {
+      if (!S.current) return;
+      S.current.veil = +inp.value; if (!S.current.veil) delete S.current.veil;
+      out.textContent = inp.value; requestRender(); saveItem(S.current);
+    });
+    onDoubleTap(row, () => { inp.value = 0; inp.dispatchEvent(new Event('input')); });
+    sliderUI.veil = { inp, out };
+    $('#sliders').append(row);
+  }
   // Botones − / + junto al número de cada ajuste, para mover de a un paso (mantener apretado repite).
   function addNudges(root) {
     root.querySelectorAll('.slider').forEach(row => {
@@ -1374,6 +1436,8 @@
       sliderUI[a.key].inp.value = it.adj[a.key];
       sliderUI[a.key].out.textContent = fmt(it.adj[a.key]);
     }
+    sliderUI.veil.inp.value = it.veil || 0; sliderUI.veil.out.textContent = String(it.veil || 0);
+    const ex = $('#sliders .slider.exposure span'); if (ex) ex.textContent = it.kind === 'video' ? 'Brillo' : 'Exposición';
     syncCropUI();
   }
 
@@ -2248,6 +2312,9 @@
     let s;
     if (videoSource(it)) {
       while (seeking) await new Promise(r => setTimeout(r, 50));
+      const v = S.video.v;   // la portada es el fotograma elegido, no donde esté corriendo el video
+      if (!v.paused) vidPause();
+      if (Math.abs(v.currentTime - (it.t || 0)) > 0.02) await seekVideo(v, it.t || 0);
       s = videoSource(it);
     }
     if (s) { /* fotograma actual del video */ }
@@ -2262,6 +2329,7 @@
     const c = canvas(OUT_W, OUT_H);
     const cx = c.getContext('2d');
     cx.drawImage(out, 0, 0);
+    applyVeil(cx, it, OUT_W, OUT_H);
     T.draw(cx, it, OUT_W, OUT_H);
     const blob = await toBlob(c, 'image/jpeg', 0.95);
     c.width = 0;

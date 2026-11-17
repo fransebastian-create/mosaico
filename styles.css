@@ -612,3 +612,8 @@ body.has-banner { --bh: 44px; }
 #textPanel:not(.fitting) .fit-only { display: none !important; }
 .fit-hint { margin: 2px 0 8px; font-size: 12px; line-height: 1.4; color: var(--muted); }
 #tFit.on { background: var(--sel, #3b82f6); color: #fff; border-color: transparent; }
+
+/* video de fondo: sólo ajustes simples (brillo, contraste, saturación, oscurecer) */
+#sliders .slider.veil { display: none; }
+body.is-video #sliders .slider.veil { display: block; }
+body.is-video #sliders .slider:not(.exposure):not(.contrast):not(.saturation):not(.veil) { display: none; }
