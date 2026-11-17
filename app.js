@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.17';
+  const VERSION = 'v1.18';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -488,7 +488,7 @@
 
   // ---- textos ----
   const T = window.createMosaicoText({
-    S, ASPECT, frame, clamp, rad, snapRot, normRot, uid, toast: (...a) => toast(...a), DB, onDoubleTap,
+    S, ASPECT, frame, clamp, rad, snapRot, normRot, uid, toast: (...a) => toast(...a), DB, onDoubleTap, wheelTwist,
     saveItem: it => saveItem(it), requestRender: () => requestRender(),
     redrawAll: () => { for (const it of S.items.values()) drawThumb(it); requestRender(); },
     kickSync: () => Sync && Sync.kick(), trashFile: id => Sync && Sync.trashFile(id),
@@ -1223,6 +1223,16 @@
   // Giro con gesto: hay que girar más de unos grados para que empiece (así el zoom no gira sin querer),
   // y se "imanta" a 0°, 90°, 180°…
   const ROT_START = 5;
+  // giro con ⌥ + rueda: se acumula durante el gesto (si no, el imán de 0° / 90° no lo dejaría salir)
+  let wTwist = null;
+  function wheelTwist(e, cur, key = 'bg') {
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    const d = (Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX) * k;
+    const now = performance.now();
+    if (!wTwist || wTwist.key !== key || now - wTwist.t > 350) wTwist = { start: cur, acc: 0, key };
+    wTwist.t = now; wTwist.acc += clamp(d * 0.05, -4, 4);
+    return wTwist;
+  }
   function makeTwist() { return { acc: 0, on: false, start: S.current.crop.rot || 0 }; }
   function twistBy(tw, d, px, py, rect) {
     tw.acc += d;
@@ -1309,6 +1319,12 @@
     if (T.wheel(e)) return;
     e.preventDefault();
     const rect = frame.getBoundingClientRect();
+    if (e.altKey && !e.ctrlKey) {   // ⌥ Option + dos dedos / rueda: girar de a poquito (Chrome no avisa el giro del trackpad)
+      const w = wheelTwist(e, S.current.crop.rot || 0, 'bg:' + S.current.id);
+      rotateTo(rect.width / 2, rect.height / 2, snapRot(w.start + w.acc), rect);
+      cropChanged();
+      return;
+    }
     const f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015));
     zoomAt(e.clientX - rect.left, e.clientY - rect.top, f, rect);
     cropChanged();

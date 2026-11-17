@@ -844,6 +844,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   function wheel(e) {
     const L = cur(); if (!L || L.locked || isMulti()) return false;
     e.preventDefault();
+    if (e.altKey && !e.ctrlKey) { const w = A.wheelTwist(e, L.rot || 0, L.id); L.rot = snapRot(normRot(w.start + w.acc)); changed(); syncPanelValues(); return true; }   // ⌥ + dos dedos: girar la capa
     if (fitting(L)) { fitScale(L, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))); changed(); syncPanelValues(); return true; }
     L.size = clamp(L.size * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), 0.012, maxSize(L));
     changed(); syncPanelValues();
