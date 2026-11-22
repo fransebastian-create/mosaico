@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.19';
+  const VERSION = 'v1.20';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -2432,6 +2432,83 @@
     c.width = 0;
     return blob;
   }
+  // ---- descargar el video con las capas: se graba en tiempo real (dura lo mismo que el pedazo elegido) ----
+  async function exportVideo(it, ac, job) {
+    const vblob = await getVideoBlob(it); if (!vblob) throw new Error('no se encontró el video');
+    const mime = ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
+      .find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+    if (!mime) throw new Error('este navegador no puede grabar video (probá en Chrome)');
+    if (vidPlaying()) vidPause();
+    const v = await openVideo(vblob);
+    let stream = null;
+    try {
+      v.loop = false; v.muted = false; v.volume = 1;
+      let audio = null;   // el sonido va directo a la grabación (no se escucha mientras se graba)
+      try { const src = ac.createMediaElementSource(v), dst = ac.createMediaStreamDestination(); src.connect(dst); audio = dst.stream.getAudioTracks()[0] || null; } catch (e) { console.warn(e); }
+      await T.fontsReady(it);
+      const c = canvas(OUT_W, OUT_H), cx = c.getContext('2d'), { a, b } = trimOf(it);
+      const draw = () => {
+        const out = R.render(v, v.videoWidth, v.videoHeight, it.crop, it.adj, OUT_W, OUT_H, ASPECT);
+        cx.drawImage(out, 0, 0); applyVeil(cx, it, OUT_W, OUT_H); T.draw(cx, it, OUT_W, OUT_H);
+      };
+      await seekVideo(v, a); draw();
+      stream = c.captureStream(30); if (audio) stream.addTrack(audio);
+      const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12e6, audioBitsPerSecond: 192e3 });
+      const chunks = []; rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      const stopped = new Promise(r => { rec.onstop = r; });
+      // si se cambia de pestaña, el navegador deja de dibujar: se pausa todo y sigue al volver
+      const vis = () => { if (document.hidden) { v.pause(); if (rec.state === 'recording') rec.pause(); } else { if (rec.state === 'paused') rec.resume(); if (!job.cancel) v.play().catch(() => { }); } };
+      document.addEventListener('visibilitychange', vis);
+      rec.start(500);
+      await v.play();
+      await new Promise(res => {
+        let fin = false; const end = () => { if (!fin) { fin = true; clearInterval(iv); res(); } };
+        const over = () => job.cancel || v.ended || v.currentTime >= b - 0.01;
+        const step = () => { if (fin) return; if (over()) return end(); draw(); job.progress((v.currentTime - a) / Math.max(0.01, b - a)); v.requestVideoFrameCallback ? v.requestVideoFrameCallback(step) : requestAnimationFrame(step); };
+        const iv = setInterval(() => { if (over()) end(); }, 50);
+        v.addEventListener('ended', end, { once: true });
+        step();
+      });
+      document.removeEventListener('visibilitychange', vis);
+      v.pause(); draw();
+      rec.stop(); await stopped;
+      if (job.cancel) return null;
+      return { blob: new Blob(chunks, { type: mime.split(';')[0] }), ext: mime.startsWith('video/mp4') ? 'mp4' : 'webm' };
+    } finally {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      closeVideo(v);
+    }
+  }
+  function openVidDownload(it) {
+    const sh = $('#vidDlSheet'), { a, b } = trimOf(it);
+    $('#vidDlNote').textContent = `Se graba en tiempo real: tarda lo mismo que el video (${(b - a).toFixed(1).replace('.', ',')} s). No cambies de pestaña mientras tanto.`;
+    sh.hidden = false;
+    sh.onclick = async e => {
+      const btn = e.target.closest('[data-v]'); if (!btn && e.target !== sh) return;
+      sh.hidden = true;
+      const what = btn ? btn.dataset.v : 'cancel';
+      if (what === 'cover') {
+        try { toast('Preparando…', true); const blob = await exportItem(it); toast('Lista'); await deliver([new File([blob], `${baseName(it.name)}-portada-1080x1350.jpg`, { type: 'image/jpeg' })]); }
+        catch (e) { console.error(e); toast('No se pudo exportar'); }
+        return;
+      }
+      if (what !== 'video') return;
+      const AC = window.AudioContext || window.webkitAudioContext, ac = AC ? new AC() : null;   // se crea con el toque, si no el navegador no deja sonido
+      if (ac) ac.resume().catch(() => { });
+      const rs = $('#recSheet'), bar = rs.querySelector('.rec-bar i'), pct = $('#recPct');
+      const job = { cancel: false, progress: f => { f = clamp(f, 0, 1); bar.style.width = (f * 100).toFixed(1) + '%'; pct.textContent = Math.round(f * 100) + '%'; } };
+      job.progress(0); rs.hidden = false;
+      $('#recCancel').onclick = () => { job.cancel = true; };
+      try {
+        const r = await exportVideo(it, ac, job);
+        rs.hidden = true;
+        if (!r) { toast('Se canceló la grabación'); return; }
+        toast(r.ext === 'mp4' ? 'Video listo' : 'Video listo (formato WebM: este navegador no graba MP4)', false, 5000);
+        await deliver([new File([r.blob], `${baseName(it.name)}-video-1080x1350.${r.ext}`, { type: r.blob.type })]);
+      } catch (e) { console.error(e); rs.hidden = true; toast('No se pudo grabar el video: ' + (e.message || e), false, 8000); }
+      finally { if (ac) ac.close().catch(() => { }); }
+    };
+  }
   const baseName = n => (n || 'foto').replace(/\.[^.]+$/, '').replace(/[^\w\-]+/g, '_').slice(0, 40);
 
   function downloadBlob(blob, name) {
@@ -2443,7 +2520,7 @@
   async function deliver(files) {
     // iPhone: hoja de compartir → "Guardar imagen" va directo a Fotos.
     if (isIOS && navigator.canShare && navigator.canShare({ files })) {
-      $('#sheetText').textContent = files.length === 1 ? 'Tu foto está lista.' : `Tus ${files.length} fotos están listas.`;
+      $('#sheetText').textContent = files.length === 1 ? (/^video\//.test(files[0].type) ? 'Tu video está listo.' : 'Tu foto está lista.') : `Tus ${files.length} fotos están listas.`;
       $('#sheet').hidden = false;
       $('#sheetShare').onclick = async () => {
         try { await navigator.share({ files }); } catch (e) { if (e.name !== 'AbortError') toast('No se pudo compartir'); }
@@ -2475,6 +2552,7 @@
         await deliver(files);
         return;
       }
+      if (it.kind === 'video') { openVidDownload(it); return; }
       toast('Preparando…', true);
       const blob = await exportItem(it);
       toast('Lista');

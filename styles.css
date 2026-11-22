@@ -637,3 +637,8 @@ body.is-video #sliders .slider:not(.exposure):not(.contrast):not(.saturation):no
 .trim-ph { position: absolute; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 2px rgba(0,0,0,.8); pointer-events: none; }
 .trim-ph[hidden] { display: none; }
 @media (pointer: coarse) { .trim { height: 56px; margin: 0 18px; } .trim-h { width: 20px; } .trim-h.in { left: -20px; } .trim-h.out { right: -20px; } }
+
+/* grabación del video con capas */
+.rec-bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; margin: 6px 0 10px; }
+.rec-bar i { display: block; height: 100%; width: 0; background: #ffd34d; transition: width .15s linear; }
+#recPct { color: var(--muted); font-variant-numeric: tabular-nums; }
