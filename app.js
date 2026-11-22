@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.23';
+  const VERSION = 'v1.24';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -247,11 +247,14 @@
         if (!v.videoWidth) return fail();
         res(v);
       };
+      liveVideos.add(v);
       v.src = url; v.load();
     });
   }
+  const liveVideos = new Set();   // videos abiertos (para poder pausarlos todos)
   function closeVideo(v) {
     if (!v) return;
+    liveVideos.delete(v);
     try { v.pause(); v.removeAttribute('src'); v.load(); } catch { }
     URL.revokeObjectURL(v._url);
   }
@@ -1069,14 +1072,17 @@
         S.full = { id, img, w: img.naturalWidth, h: img.naturalHeight };
         requestRender();
       }
-      if (isVid && !S.video) {
-        const vblob = await getVideoBlob(it);
-        if (S.current !== it || !vblob) return;
-        const v = await openVideo(vblob);
-        if (S.current !== it) { closeVideo(v); return; }
-        await seekVideo(v, it.t || 0);
-        if (S.current !== it) { closeVideo(v); return; }
-        S.video = { id, v, it, dirty: false };
+      if (isVid && !S.video && S.videoOpening !== id) {
+        S.videoOpening = id;   // si se abre dos veces seguidas (doble clic), no se crean dos videos
+        try {
+          const vblob = await getVideoBlob(it);
+          if (S.current !== it || !vblob) return;
+          const v = await openVideo(vblob);
+          if (S.current !== it || S.video) { closeVideo(v); return; }
+          await seekVideo(v, it.t || 0);
+          if (S.current !== it || S.video) { closeVideo(v); return; }
+          S.video = { id, v, it, dirty: false };
+        } finally { if (S.videoOpening === id) S.videoOpening = null; }
         requestRender();
         buildStrip(it, vblob);
         vidPlay();   // el video de fondo arranca solo (sin sonido, salvo que lo hayas prendido)
@@ -1107,7 +1113,11 @@
     vidLoop(++vidGen);
     syncVidUI();
   }
-  function vidPause() { if (S.video) S.video.v.pause(); syncVidUI(); requestRender(); }
+  function vidPause() {
+    if (S.video) S.video.v.pause();
+    for (const v of liveVideos) if (!v._export) v.pause();   // por las dudas: ningún otro video queda sonando
+    syncVidUI(); requestRender();
+  }
   // ---- formato del video: Reel 9:16 (pantalla completa) o Feed 4:5; guías de la grilla y de Instagram ----
   const guides = document.createElement('div');
   guides.className = 'reel-guides'; guides.hidden = true;
@@ -2555,7 +2565,7 @@
       .find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
     if (!mime) throw new Error('este navegador no puede grabar video (probá en Chrome)');
     if (vidPlaying()) vidPause();
-    const v = await openVideo(vblob);
+    const v = await openVideo(vblob); v._export = true;
     let stream = null;
     try {
       v.loop = false; v.muted = false; v.volume = 1;
@@ -2663,7 +2673,7 @@
     let encErr = null;
     const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: e => { encErr = e; } });
     enc.configure(vcfg);
-    const v = await openVideo(vblob);
+    const v = await openVideo(vblob); v._export = true;
     try {
       const c = canvas(OW, OH), cx = c.getContext('2d');
       const total = Math.max(1, Math.round((b - a) * FPS));
