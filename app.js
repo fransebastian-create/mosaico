@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.20';
+  const VERSION = 'v1.21';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -19,6 +19,12 @@
     { key: 'saturation', label: 'Saturación' },
     { key: 'vibrance', label: 'Intensidad' },
     { key: 'fade', label: 'Desvanecer', min: 0 },
+    // sólo para fondos de video
+    { key: 'whites', label: 'Blancos', video: true },
+    { key: 'blacks', label: 'Negros', video: true },
+    { key: 'sharpen', label: 'Nitidez', min: 0, video: true },
+    { key: 'vignette', label: 'Viñeta', video: true },
+    { key: 'grain', label: 'Grano', min: 0, video: true },
   ];
   const zeroAdj = () => Object.fromEntries(ADJ.map(a => [a.key, 0]));
 
@@ -135,7 +141,7 @@
   };
 
   const cleanTexts = ts => (ts || []).map(({ _box, ...L }) => L);
-  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, veil: it.veil, vin: it.vin, vout: it.vout, parent: it.parent, slides: it.slides, archived: it.archived, archivedPos: it.archivedPos, sync: it.sync || null });
+  const meta = it => ({ id: it.id, name: it.name, w: it.w, h: it.h, crop: it.crop, adj: it.adj, texts: cleanTexts(it.texts), bg: it.bg, kind: it.kind || 'image', duration: it.duration, t: it.t, veil: it.veil, vin: it.vin, vout: it.vout, vfade: it.vfade, parent: it.parent, slides: it.slides, archived: it.archived, archivedPos: it.archivedPos, sync: it.sync || null });
   let Sync = null;   // sincronización con Google Drive (drive.js)
   let Backup = null;   // copia automática en una carpeta (más abajo)
   let Hist = null;     // deshacer / rehacer de cada publicación (más abajo)
@@ -364,14 +370,22 @@
       return applyAdj(adj, w, h);
     }
     function applyAdj(adj, ow, oh) {
-      if (!adj || ADJ.every(a => !adj[a.key])) return c2;
+      if (!adj || ADJ.every(a => !adj[a.key])) return c2;   // (los de video que falten cuentan como 0)
       const u = k => (adj[k] || 0) / 100;
       const ex = Math.pow(2, u('exposure') * 1.5), con = 1 + u('contrast') * 0.5;
       const hi = u('highlights'), sh_ = u('shadows'), tp = u('temp'), tn = u('tint');
       const sat = 1 + u('saturation'), vib = u('vibrance'), fd = u('fade');
+      const wh = u('whites'), bl = u('blacks'), shp = u('sharpen'), vig = u('vignette'), gr = u('grain');
+      const lo = -bl * 0.12, hiW = 1 - wh * 0.12;
       const wr = 1 + 0.2 * tp, wg = 1 - 0.15 * tn, wb = 1 - 0.2 * tp, g = 1 / 2.2;
-      const im = x2.getImageData(0, 0, ow, oh), d = im.data;
+      const im = x2.getImageData(0, 0, ow, oh), d = im.data, o0 = shp ? new Uint8ClampedArray(d) : null;
       for (let i = 0; i < d.length; i += 4) {
+        const px = (i >> 2) % ow, py = ((i >> 2) / ow) | 0;
+        if (o0) for (let ch = 0; ch < 3; ch++) {   // nitidez: el punto contra el promedio de sus vecinos
+          const at = (xx, yy) => o0[(clamp(yy, 0, oh - 1) * ow + clamp(xx, 0, ow - 1)) * 4 + ch];
+          const c0 = o0[i + ch], bl4 = (at(px - 1, py) + at(px + 1, py) + at(px, py - 1) + at(px, py + 1)) / 4;
+          d[i + ch] = clamp(c0 + (c0 - bl4) * shp * 1.5, 0, 255);
+        }
         let R_ = lin[d[i]], G = lin[d[i + 1]], B = lin[d[i + 2]];
         const y0 = 0.2126 * R_ + 0.7152 * G + 0.0722 * B;
         R_ *= wr; G *= wg; B *= wb;
@@ -380,13 +394,18 @@
         let y = 0.2126 * R_ + 0.7152 * G + 0.0722 * B;
         const dd = sh_ * 0.3 * (1 - ss(0, 0.6, y)) + hi * 0.3 * ss(0.4, 1, y);
         R_ = (R_ + dd - 0.5) * con + 0.5; G = (G + dd - 0.5) * con + 0.5; B = (B + dd - 0.5) * con + 0.5;
+        if (wh || bl) { R_ = (R_ - lo) / (hiW - lo); G = (G - lo) / (hiW - lo); B = (B - lo) / (hiW - lo); }
         y = 0.2126 * R_ + 0.7152 * G + 0.0722 * B;
         R_ = y + (R_ - y) * sat; G = y + (G - y) * sat; B = y + (B - y) * sat;
         const s = clamp(Math.max(R_, G, B) - Math.min(R_, G, B), 0, 1), v = 1 + vib * (1 - s);
         R_ = y + (R_ - y) * v; G = y + (G - y) * v; B = y + (B - y) * v;
-        d[i] = (R_ * (1 - 0.15 * fd) + 0.15 * fd) * 255;
-        d[i + 1] = (G * (1 - 0.15 * fd) + 0.15 * fd) * 255;
-        d[i + 2] = (B * (1 - 0.15 * fd) + 0.15 * fd) * 255;
+        R_ = R_ * (1 - 0.15 * fd) + 0.15 * fd; G = G * (1 - 0.15 * fd) + 0.15 * fd; B = B * (1 - 0.15 * fd) + 0.15 * fd;
+        if (vig) {
+          const qx = (px / ow - 0.5) * 1.41, qy = (py / oh - 0.5) * 1.41, f = ss(0.45, 1, Math.hypot(qx, qy)) * Math.abs(vig) * 0.6;
+          if (vig > 0) { R_ *= 1 - f; G *= 1 - f; B *= 1 - f; } else { R_ += (1 - R_) * f; G += (1 - G) * f; B += (1 - B) * f; }
+        }
+        if (gr) { const n = (Math.random() - 0.5) * gr * 0.15; R_ += n; G += n; B += n; }
+        d[i] = R_ * 255; d[i + 1] = G * 255; d[i + 2] = B * 255;
       }
       x2.putImageData(im, 0, 0);
       return c2;
@@ -403,10 +422,16 @@
     const fs = `precision highp float;
       varying vec2 v; uniform sampler2D t;
       uniform float u_exposure,u_contrast,u_highlights,u_shadows,u_temp,u_tint,u_saturation,u_vibrance,u_fade,u_keep;
+      uniform float u_whites,u_blacks,u_sharpen,u_vignette,u_grain,u_seed; uniform vec2 u_px;
       float luma(vec3 c){ return dot(c, vec3(0.2126,0.7152,0.0722)); }
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233)) + u_seed) * 43758.5453); }
       void main(){
         vec4 t4 = texture2D(t, v);
         vec3 c = t4.rgb;
+        if (u_sharpen > 0.0) {   // nitidez: el punto contra el promedio de sus vecinos
+          vec3 b4 = (texture2D(t, v + vec2(u_px.x, 0.0)).rgb + texture2D(t, v - vec2(u_px.x, 0.0)).rgb + texture2D(t, v + vec2(0.0, u_px.y)).rgb + texture2D(t, v - vec2(0.0, u_px.y)).rgb) * 0.25;
+          c = clamp(c + (c - b4) * u_sharpen * 1.5, 0.0, 1.0);
+        }
         // balance de blancos y exposición en luz lineal
         vec3 l = pow(c, vec3(2.2));
         float y0 = luma(l);
@@ -419,6 +444,9 @@
         c += u_shadows * 0.3 * (1.0 - smoothstep(0.0, 0.6, y)) + u_highlights * 0.3 * smoothstep(0.4, 1.0, y);
         // contraste
         c = (c - 0.5) * (1.0 + u_contrast * 0.5) + 0.5;
+        // blancos y negros (puntos de blanco y de negro)
+        float lo = -u_blacks * 0.12, hi = 1.0 - u_whites * 0.12;
+        c = (c - lo) / (hi - lo);
         // saturación e intensidad
         y = luma(c);
         c = mix(vec3(y), c, 1.0 + u_saturation);
@@ -426,6 +454,10 @@
         c = mix(vec3(y), c, 1.0 + u_vibrance * (1.0 - clamp(s, 0.0, 1.0)));
         // desvanecer (negros lavados)
         c = c * (1.0 - 0.15*u_fade) + 0.15*u_fade;
+        // viñeta (positiva oscurece las esquinas, negativa las aclara) y grano
+        float vf = smoothstep(0.45, 1.0, length((v - 0.5) * 1.41)) * abs(u_vignette) * 0.6;
+        c = u_vignette >= 0.0 ? c * (1.0 - vf) : mix(c, vec3(1.0), vf);
+        c += (hash(gl_FragCoord.xy) - 0.5) * u_grain * 0.15;
         gl_FragColor = vec4(clamp(c, 0.0, 1.0), mix(1.0, t4.a, u_keep));   // u_keep: respetar la transparencia (capas)
       }`;
     const sh = (type, src) => {
@@ -448,7 +480,7 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     const U = {};
     for (const a of ADJ) U[a.key] = gl.getUniformLocation(prog, 'u_' + a.key);
-    const uKeep = gl.getUniformLocation(prog, 'u_keep');
+    const uKeep = gl.getUniformLocation(prog, 'u_keep'), uPx = gl.getUniformLocation(prog, 'u_px'), uSeed = gl.getUniformLocation(prog, 'u_seed');
 
     const c2 = canvas(1, 1), x2 = c2.getContext('2d');
     // 1) recorta y escala con calidad alta en 2D, 2) aplica el color en la GPU
@@ -460,8 +492,8 @@
       if (glc.width !== ow || glc.height !== oh) { glc.width = ow; glc.height = oh; }
       gl.viewport(0, 0, ow, oh);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, c2);
-      for (const a of ADJ) gl.uniform1f(U[a.key], (adj ? adj[a.key] : 0) / 100);
-      gl.uniform1f(uKeep, 0);
+      for (const a of ADJ) gl.uniform1f(U[a.key], (adj ? adj[a.key] || 0 : 0) / 100);
+      gl.uniform1f(uKeep, 0); gl.uniform2f(uPx, 1 / ow, 1 / oh); gl.uniform1f(uSeed, (performance.now() % 1000) / 7);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       return glc;
     }
@@ -473,7 +505,7 @@
       gl.viewport(0, 0, w, h);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c2);
       for (const a of ADJ) gl.uniform1f(U[a.key], (adj ? adj[a.key] || 0 : 0) / 100);
-      gl.uniform1f(uKeep, 1);
+      gl.uniform1f(uKeep, 1); gl.uniform2f(uPx, 1 / w, 1 / h); gl.uniform1f(uSeed, 0);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       return glc;
     }
@@ -614,6 +646,18 @@
   }
   // pedazo del video que se usa (Cortar video): de vin a vout, en segundos
   const trimOf = it => { const d = it.duration || 0, a = clamp(it.vin || 0, 0, d), b = clamp(it.vout ?? d, a, d); return { a, b: b > a ? b : d }; };
+  // fundido desde / hacia negro al principio y al final del pedazo elegido (sólo cuando el video corre y en el MP4)
+  function fadeAlpha(it, t) {
+    const f = it.vfade; if (!f || (!f.in && !f.out)) return 0;
+    const { a, b } = trimOf(it); let al = 0;
+    if (f.in) al = Math.max(al, 1 - (t - a) / f.in);
+    if (f.out) al = Math.max(al, 1 - (b - t) / f.out);
+    return clamp(al, 0, 1);
+  }
+  function applyFade(cx, it, t, w, h) {
+    const al = fadeAlpha(it, t); if (!al) return;
+    cx.save(); cx.setTransform(1, 0, 0, 1, 0, 0); cx.globalAlpha = al; cx.fillStyle = '#000'; cx.fillRect(0, 0, w, h); cx.restore();
+  }
   const vidPlaying = () => !!(S.video && S.video.v && !S.video.v.paused);
   function videoSource(it) {
     if (S.video && S.video.id === it.id && S.video.v.videoWidth) {
@@ -1262,6 +1306,7 @@
     pctx.drawImage(out, 0, 0);
     if (!S.holdBefore) applyVeil(pctx, it, pv.width, pv.height);
     T.draw(pctx, it, pv.width, pv.height, { preview: true });
+    if (it.kind === 'video' && vidPlaying() && S.video.it === it) applyFade(pctx, it, S.video.v.currentTime, pv.width, pv.height);
     T.afterPreview();
     const fw = baseF(it.w, it.h, it.crop.rot) / it.crop.z;
     $('#lowres').hidden = fw >= OUT_W * 0.75;
@@ -1469,7 +1514,7 @@
   const fmt = v => v > 0 ? '+' + v : String(v);
   for (const a of ADJ) {
     const row = document.createElement('div');
-    row.className = 'slider ' + a.key;
+    row.className = 'slider ' + a.key + (a.video ? ' vonly' : '');
     row.innerHTML = `<label><span>${a.label}</span><output>0</output></label>
       <input type="range" min="${a.min ?? -100}" max="100" step="1" value="0" aria-label="${a.label}">`;
     const inp = row.querySelector('input'), out = row.querySelector('output');
@@ -1497,6 +1542,31 @@
     onDoubleTap(row, () => { inp.value = 0; inp.dispatchEvent(new Event('input')); });
     sliderUI.veil = { inp, out };
     $('#sliders').append(row);
+  }
+  // Fundido de entrada / salida (segundos) y "Más ajustes" (sólo fondos de video)
+  for (const [k, label] of [['in', 'Fundido de entrada'], ['out', 'Fundido de salida']]) {
+    const row = document.createElement('div');
+    row.className = 'slider vonly fade' + k;
+    row.innerHTML = `<label><span>${label}</span><output>0 s</output></label><input type="range" min="0" max="30" step="1" value="0" aria-label="${label}">`;
+    const inp = row.querySelector('input'), out = row.querySelector('output');
+    const show = v => { out.textContent = v ? (v / 10).toFixed(1).replace('.', ',') + ' s' : 'no'; };
+    inp.addEventListener('input', () => {
+      const it = S.current; if (!it) return;
+      const f = { ...(it.vfade || {}) }; f[k] = +inp.value / 10; if (!f[k]) delete f[k];
+      if (Object.keys(f).length) it.vfade = f; else delete it.vfade;
+      show(+inp.value); requestRender(); saveItem(it);
+    });
+    onDoubleTap(row, () => { inp.value = 0; inp.dispatchEvent(new Event('input')); });
+    sliderUI['fade_' + k] = { inp, out, show };
+    $('#sliders').append(row);
+  }
+  {
+    const row = document.createElement('div'); row.className = 'more-adj';
+    row.innerHTML = `<button class="chip" id="moreAdjBtn">Más ajustes</button>`;
+    $('#sliders').append(row);
+    const btn = row.querySelector('button');
+    let open = false;
+    btn.addEventListener('click', () => { open = !open; document.body.classList.toggle('more-adj', open); btn.textContent = open ? 'Menos ajustes' : 'Más ajustes'; });
   }
   // Botones − / + junto al número de cada ajuste, para mover de a un paso (mantener apretado repite).
   function addNudges(root) {
@@ -1530,9 +1600,10 @@
   function syncControls() {
     const it = S.current; if (!it) return;
     for (const a of ADJ) {
-      sliderUI[a.key].inp.value = it.adj[a.key];
-      sliderUI[a.key].out.textContent = fmt(it.adj[a.key]);
+      sliderUI[a.key].inp.value = it.adj[a.key] || 0;
+      sliderUI[a.key].out.textContent = fmt(it.adj[a.key] || 0);
     }
+    for (const k of ['in', 'out']) { const v = Math.round(((it.vfade && it.vfade[k]) || 0) * 10); sliderUI['fade_' + k].inp.value = v; sliderUI['fade_' + k].show(v); }
     sliderUI.veil.inp.value = it.veil || 0; sliderUI.veil.out.textContent = String(it.veil || 0);
     const ex = $('#sliders .slider.exposure span'); if (ex) ex.textContent = it.kind === 'video' ? 'Brillo' : 'Exposición';
     syncCropUI();
@@ -2444,12 +2515,15 @@
     try {
       v.loop = false; v.muted = false; v.volume = 1;
       let audio = null;   // el sonido va directo a la grabación (no se escucha mientras se graba)
-      try { const src = ac.createMediaElementSource(v), dst = ac.createMediaStreamDestination(); src.connect(dst); audio = dst.stream.getAudioTracks()[0] || null; } catch (e) { console.warn(e); }
+      let gain = null;   // el sonido también hace el fundido
+      try { const src = ac.createMediaElementSource(v), dst = ac.createMediaStreamDestination(); gain = ac.createGain(); src.connect(gain); gain.connect(dst); audio = dst.stream.getAudioTracks()[0] || null; } catch (e) { console.warn(e); }
       await T.fontsReady(it);
       const c = canvas(OUT_W, OUT_H), cx = c.getContext('2d'), { a, b } = trimOf(it);
       const draw = () => {
         const out = R.render(v, v.videoWidth, v.videoHeight, it.crop, it.adj, OUT_W, OUT_H, ASPECT);
         cx.drawImage(out, 0, 0); applyVeil(cx, it, OUT_W, OUT_H); T.draw(cx, it, OUT_W, OUT_H);
+        applyFade(cx, it, v.currentTime, OUT_W, OUT_H);
+        if (gain) gain.gain.value = 1 - fadeAlpha(it, v.currentTime);
       };
       await seekVideo(v, a); draw();
       stream = c.captureStream(30); if (audio) stream.addTrack(audio);
@@ -2695,7 +2769,7 @@
       for (const k of ['parent', 'slides']) { if (m[k] == null) delete it[k]; else it[k] = m[k]; }
       if (JSON.stringify([it.parent, it.slides]) !== famBefore) { renderGridSoon(); if (S.current) { renderStrip(); updateTitle(); } }
       const wasArch = !!it.archived;
-      for (const k of ['archived', 'archivedPos', 'veil', 'vin', 'vout']) { if (m[k] == null) delete it[k]; else it[k] = m[k]; }
+      for (const k of ['archived', 'archivedPos', 'veil', 'vin', 'vout', 'vfade']) { if (m[k] == null) delete it[k]; else it[k] = m[k]; }
       if (wasArch !== !!it.archived) {
         if (!it.archived && !isChild(it) && !S.order.includes(it.id)) { S.order.splice(clamp(it.archivedPos ?? 0, 0, S.order.length), 0, it.id); ensureThumb(it); }
         renderGridSoon(); if (!archSheet.hidden) openArchive();

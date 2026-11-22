@@ -1249,7 +1249,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       if (!v) delete L.adj[k];
       if (!Object.keys(L.adj).length) delete L.adj;
     };
-    for (const a of A.ADJ) slider(body, { label: a.label, min: a.min ?? -100, max: 100, get: L => (L.adj && L.adj[a.key]) || 0, set: setAdj(a.key), fmt: v => (v > 0 ? '+' : '') + v, cls: 'img-only' });
+    for (const a of A.ADJ.filter(x => !x.video)) slider(body, { label: a.label, min: a.min ?? -100, max: 100, get: L => (L.adj && L.adj[a.key]) || 0, set: setAdj(a.key), fmt: v => (v > 0 ? '+' : '') + v, cls: 'img-only' });
     const row = document.createElement('div'); row.className = 'row';
     row.innerHTML = `<button class="chip" data-x="bw">Blanco y negro</button><button class="chip" data-x="reset">Restablecer color</button>`;
     row.addEventListener('click', e => {

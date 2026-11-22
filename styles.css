@@ -614,9 +614,21 @@ body.has-banner { --bh: 44px; }
 #tFit.on { background: var(--sel, #3b82f6); color: #fff; border-color: transparent; }
 
 /* video de fondo: sólo ajustes simples (brillo, contraste, saturación, oscurecer) */
-#sliders .slider.veil { display: none; }
-body.is-video #sliders .slider.veil { display: block; }
-body.is-video #sliders .slider:not(.exposure):not(.contrast):not(.saturation):not(.veil) { display: none; }
+#sliders .slider.veil, #sliders .slider.vonly, #sliders .more-adj { display: none; }
+body.is-video #sliders .slider.veil, body.is-video #sliders .slider.vonly { display: block; }
+body.is-video #sliders .more-adj { display: block; }
+/* video: arriba lo principal; "Más ajustes" abre el resto */
+body.is-video #sliders .slider.highlights, body.is-video #sliders .slider.shadows, body.is-video #sliders .slider.temp,
+body.is-video #sliders .slider.tint, body.is-video #sliders .slider.vibrance, body.is-video #sliders .slider.fade { display: none; }
+body.is-video.more-adj #sliders .slider.highlights, body.is-video.more-adj #sliders .slider.shadows, body.is-video.more-adj #sliders .slider.temp,
+body.is-video.more-adj #sliders .slider.tint, body.is-video.more-adj #sliders .slider.vibrance, body.is-video.more-adj #sliders .slider.fade { display: block; }
+body.is-video #sliders .exposure { order: 1; } body.is-video #sliders .contrast { order: 2; } body.is-video #sliders .saturation { order: 3; }
+body.is-video #sliders .whites { order: 4; } body.is-video #sliders .blacks { order: 5; } body.is-video #sliders .sharpen { order: 6; }
+body.is-video #sliders .vignette { order: 7; } body.is-video #sliders .grain { order: 8; } body.is-video #sliders .veil { order: 9; }
+body.is-video #sliders .fadein { order: 10; } body.is-video #sliders .fadeout { order: 11; }
+body.is-video #sliders .more-adj { order: 20; grid-column: 1 / -1; }
+body.is-video #sliders .highlights, body.is-video #sliders .shadows, body.is-video #sliders .temp,
+body.is-video #sliders .tint, body.is-video #sliders .vibrance, body.is-video #sliders .fade { order: 21; }
 #textPanel.shape-mode:not(.is-line) .no-fillshape { display: none !important; }
 
 /* cortar video: tira de fotogramas con dos manijas */
