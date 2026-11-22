@@ -654,3 +654,17 @@ body.is-video #sliders .tint, body.is-video #sliders .vibrance, body.is-video #s
 .rec-bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; margin: 6px 0 10px; }
 .rec-bar i { display: block; height: 100%; width: 0; background: #ffd34d; transition: width .15s linear; }
 #recPct { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Reel 9:16: zona que se ve en la grilla y guías de Instagram */
+.reel-guides { position: absolute; inset: 0; pointer-events: none; }
+.reel-guides[hidden] { display: none; }
+.rg-out { position: absolute; left: 0; right: 0; background: rgba(0,0,0,.18); }
+.rg-out.t { top: 0; height: var(--gt); } .rg-out.b { bottom: 0; height: var(--gt); }
+.rg-grid { position: absolute; left: 0; right: 0; top: var(--gt); height: var(--gh); border-top: 1px dashed rgba(255,255,255,.75); border-bottom: 1px dashed rgba(255,255,255,.75); }
+.rg-grid span { position: absolute; right: 6px; top: 4px; font-size: 10px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.8); opacity: .85; }
+.rg-ui { display: none; position: absolute; background: repeating-linear-gradient(45deg, rgba(255,62,165,.20) 0 6px, rgba(255,62,165,.08) 6px 12px); }
+.reel-guides.ui .rg-ui { display: block; }
+.rg-ui.top { left: 0; right: 0; top: 0; height: 11.5%; }
+.rg-ui.bottom { left: 0; right: 0; bottom: 0; height: 22%; }
+.rg-ui.right { right: 0; width: 14%; top: 45%; bottom: 22%; }
+#vidFmtRow .seg { flex: none; }

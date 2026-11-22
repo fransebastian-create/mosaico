@@ -1,10 +1,15 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.21';
+  const VERSION = 'v1.22';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
+  const REEL = 9 / 16;           // video en pantalla completa (Reel)
+  // formato de cada publicación: va dentro del encuadre (crop.fa), así viaja con él a todos lados
+  const aspectOf = it => (it && it.crop && it.crop.fa) || ASPECT;
+  const outSize = it => ({ w: OUT_W, h: Math.round(OUT_W / aspectOf(it)) });
+  const freshCrop = it => ({ z: 1, cx: 0.5, cy: 0.5, rot: 0, ...(it && it.crop && it.crop.fa ? { fa: it.crop.fa } : {}) });
   const MAX_SRC = 4096;        // lado máximo que guardamos del original
   const THUMB_SRC = 1080;      // lado máximo de la versión liviana
   const MAX_ZOOM = 5;
@@ -289,14 +294,14 @@
   const base90 = r => Math.round(r / 90) * 90;
   const snapRot = r => { const n = base90(r); return Math.abs(r - n) < 3 ? n : r; };
   // ancho del marco (en px de la imagen) con zoom 1: el rectángulo 4:5 más grande que entra girado
-  function baseF(w, h, rot) {
+  function baseF(w, h, rot, fa = ASPECT) {
     const a = rad(rot || 0), c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
-    const f = Math.min(w / (c + s / ASPECT), h / (s + c / ASPECT));
+    const f = Math.min(w / (c + s / fa), h / (s + c / fa));
     return (rot || 0) % 360 ? f * 0.998 : f;   // margen mínimo para que no asomen bordes
   }
   function frameSize(w, h, crop) {
-    const fw = baseF(w, h, crop.rot) / crop.z;
-    return { fw, fh: fw / ASPECT };
+    const fa = crop.fa || ASPECT, fw = baseF(w, h, crop.rot, fa) / crop.z;
+    return { fw, fh: fw / fa };
   }
   function clampCrop(it) {
     const c = it.crop;
@@ -330,7 +335,7 @@
   // Dibuja el recorte (girado o no) en un contexto de ow×oh. Sirve para 4:5 y para la miniatura 3:4.
   function drawCropped(x, src, sw, sh, crop, ow, oh, hq) {
     const rot = crop.rot || 0;
-    const fh = baseF(sw, sh, rot) / crop.z / ASPECT;   // alto del marco en px de la fuente
+    const fa = crop.fa || ASPECT, fh = baseF(sw, sh, rot, fa) / crop.z / fa;   // alto del marco en px de la fuente
     const k = oh / fh;
     x.setTransform(1, 0, 0, 1, 0, 0);
     x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
@@ -520,7 +525,7 @@
 
   // ---- textos ----
   const T = window.createMosaicoText({
-    S, ASPECT, frame, clamp, rad, snapRot, normRot, uid, toast: (...a) => toast(...a), DB, onDoubleTap, wheelTwist,
+    S, ASPECT, aspectOf, frame, clamp, rad, snapRot, normRot, uid, toast: (...a) => toast(...a), DB, onDoubleTap, wheelTwist,
     saveItem: it => saveItem(it), requestRender: () => requestRender(),
     redrawAll: () => { for (const it of S.items.values()) drawThumb(it); requestRender(); },
     kickSync: () => Sync && Sync.kick(), trashFile: id => Sync && Sync.trashFile(id),
@@ -674,13 +679,21 @@
     const vs = S.video && S.video.id === it.id && (vidPlaying() || Math.abs(S.video.v.currentTime - (it.t || 0)) > 0.05) ? null : videoSource(it);
     const src = vs || { img: it.thumb, w: it.thumb.naturalWidth, h: it.thumb.naturalHeight };
     const adj = S.showOriginalGrid ? null : it.adj;
-    const out = it === S.current ? renderBase('thumb', it, src, adj, cw, ch, S.gridAspect) : R.render(src.img, src.w, src.h, it.crop, adj, cw, ch, S.gridAspect);
     const c = it.canvas;
     if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
     const cx = c.getContext('2d');
-    cx.drawImage(out, 0, 0);
-    applyVeil(cx, it, cw, ch);
-    T.draw(cx, it, cw, ch);
+    if (aspectOf(it) !== ASPECT) {   // Reel: se arma entero y la grilla muestra el centro (como Instagram)
+      const fh = Math.round(cw / aspectOf(it)), tmp = canvas(cw, fh), tx = tmp.getContext('2d');
+      tx.drawImage(R.render(src.img, src.w, src.h, it.crop, adj, cw, fh), 0, 0);
+      applyVeil(tx, it, cw, fh); T.draw(tx, it, cw, fh);
+      cx.drawImage(tmp, 0, Math.round((fh - ch) / 2), cw, ch, 0, 0, cw, ch);
+      tmp.width = 0;
+    } else {
+      const out = it === S.current ? renderBase('thumb', it, src, adj, cw, ch, S.gridAspect) : R.render(src.img, src.w, src.h, it.crop, adj, cw, ch, S.gridAspect);
+      cx.drawImage(out, 0, 0);
+      applyVeil(cx, it, cw, ch);
+      T.draw(cx, it, cw, ch);
+    }
     const sc = it.stripCanvas;
     if (sc) {
       const sw = 96, sh = Math.round(sw / S.gridAspect);
@@ -780,7 +793,7 @@
           await seekVideo(v, t);
           const fr = await grabFrame(v);
           const id = uid();
-          const it = { id, name: f.name || 'video.mov', w: fr.w, h: fr.h, crop: { z: 1, cx: 0.5, cy: 0.5, rot: 0 }, adj: zeroAdj(), kind: 'video', duration: v.duration, t };
+          const it = { id, name: f.name || 'video.mov', w: fr.w, h: fr.h, crop: { z: 1, cx: 0.5, cy: 0.5, rot: 0, fa: REEL }, adj: zeroAdj(), kind: 'video', duration: v.duration, t };
           await DB.put('videos', { id, video: vblob });
           await DB.put('blobs', { id, orig: fr.orig, thumb: fr.thumb });
           await DB.put('items', meta(it));
@@ -1018,6 +1031,7 @@
     for (const x of S.items.values()) if (x.cell) x.cell.classList.remove('current');
     if (S.current !== it) T.onItemChanged();
     S.current = it;
+    T.syncAspect();
     T.renderLayers();
     const lead = leaderOf(it);
     lead.cell && lead.cell.classList.add('current');
@@ -1026,7 +1040,7 @@
     syncControls(); updateTitle(); fitFrame(); requestRender();
     Hist.base(it);
     const isVid = it.kind === 'video';
-    $('#frameRow').hidden = !isVid; $('#vidCtl').hidden = !isVid; $('#trimRow').hidden = !isVid;
+    $('#frameRow').hidden = !isVid; $('#vidCtl').hidden = !isVid; $('#vidFmtRow').hidden = !isVid; $('#trimRow').hidden = !isVid;
     if (isVid) renderTrim();
     document.body.classList.toggle('is-video', isVid);
     syncVidUI();
@@ -1094,8 +1108,36 @@
     syncVidUI();
   }
   function vidPause() { if (S.video) S.video.v.pause(); syncVidUI(); requestRender(); }
+  // ---- formato del video: Reel 9:16 (pantalla completa) o Feed 4:5; guías de la grilla y de Instagram ----
+  const guides = document.createElement('div');
+  guides.className = 'reel-guides'; guides.hidden = true;
+  guides.innerHTML = '<div class="rg-out t"></div><div class="rg-out b"></div><div class="rg-grid"><span>Se ve en la grilla</span></div><div class="rg-ui top"></div><div class="rg-ui bottom"></div><div class="rg-ui right"></div>';
+  frame.insertBefore(guides, frame.querySelector('.tlayer'));   // debajo de los recuadros de las capas
+  let igGuides = false;
+  try { igGuides = localStorage.getItem('mosaico.igGuides') === '1'; } catch { }
+  function reelGuides(it) {
+    const on = !!it && aspectOf(it) !== ASPECT;
+    guides.hidden = !on; if (!on) return;
+    const H = frame.clientHeight, W = frame.clientWidth, gh = Math.min(H, W / S.gridAspect), top = (H - gh) / 2;
+    guides.style.setProperty('--gt', top + 'px'); guides.style.setProperty('--gh', gh + 'px');
+    guides.classList.toggle('ui', igGuides);
+  }
+  function setFormat(fa) {
+    const it = S.current; if (!it || it.kind !== 'video') return;
+    if (fa === ASPECT) delete it.crop.fa; else it.crop.fa = fa;
+    clampCrop(it); T.syncAspect(); fitFrame(); saveItem(it); drawThumb(it); syncVidUI(); requestRender();
+  }
+  $('#vidFmt').addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (b) setFormat(b.dataset.v === 'reel' ? REEL : ASPECT); });
+  $('#igGuidesBtn').addEventListener('click', () => {
+    igGuides = !igGuides;
+    try { localStorage.setItem('mosaico.igGuides', igGuides ? '1' : '0'); } catch { }
+    syncVidUI(); reelGuides(S.current);
+  });
   function syncVidUI() {
     const play = $('#vidPlay'), snd = $('#vidSound'); if (!play) return;
+    const reel = !!S.current && aspectOf(S.current) !== ASPECT;
+    $('#vidFmt').querySelectorAll('button').forEach(b => b.classList.toggle('on', (b.dataset.v === 'reel') === reel));
+    const gb = $('#igGuidesBtn'); gb.hidden = !reel; gb.classList.toggle('on', igGuides);
     const on = vidPlaying(), muted = !S.video || S.video.v.muted;
     play.textContent = on ? '❚❚ Pausa' : '▶ Reproducir';
     snd.textContent = muted ? '🔇 Sin sonido' : '🔊 Con sonido';
@@ -1259,12 +1301,13 @@
     const aw = stage.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     const ah = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
     if (aw <= 0 || ah <= 0) return;
-    const fw = Math.floor(Math.min(aw, ah * ASPECT));
+    const fa = aspectOf(S.current);
+    const fw = Math.floor(Math.min(aw, ah * fa));
     frame.style.width = fw + 'px';
-    frame.style.height = Math.round(fw / ASPECT) + 'px';
+    frame.style.height = Math.round(fw / fa) + 'px';
     const dpr = window.devicePixelRatio || 1;
     const bw = Math.round(Math.min(fw * dpr, OUT_W));
-    pv.width = bw; pv.height = Math.round(bw / ASPECT);
+    pv.width = bw; pv.height = Math.round(bw / fa);
     requestRender();
   }
   new ResizeObserver(fitFrame).observe(stage);
@@ -1302,14 +1345,15 @@
     const it = S.current;
     if (!it || !it.thumb || !R) return;
     const s = source(it);
-    const out = renderBase('preview', it, s, S.holdBefore ? null : it.adj, pv.width, pv.height, ASPECT);
+    const out = renderBase('preview', it, s, S.holdBefore ? null : it.adj, pv.width, pv.height, aspectOf(it));
     pctx.drawImage(out, 0, 0);
     if (!S.holdBefore) applyVeil(pctx, it, pv.width, pv.height);
     T.draw(pctx, it, pv.width, pv.height, { preview: true });
     if (it.kind === 'video' && vidPlaying() && S.video.it === it) applyFade(pctx, it, S.video.v.currentTime, pv.width, pv.height);
     T.afterPreview();
-    const fw = baseF(it.w, it.h, it.crop.rot) / it.crop.z;
+    const fw = frameSize(it.w, it.h, it.crop).fw;
     $('#lowres').hidden = fw >= OUT_W * 0.75;
+    reelGuides(it);
   }
 
   // ---- mover, hacer zoom y girar el recorte ----
@@ -1458,7 +1502,7 @@
   frame.addEventListener('dblclick', e => {
     if (!S.current || T.dblclick(e)) return;
     // recentrar y quitar el zoom (mantiene el giro de 90° si lo hay)
-    S.current.crop = { z: 1, cx: 0.5, cy: 0.5, rot: base90(S.current.crop.rot || 0) };
+    S.current.crop = { ...freshCrop(S.current), rot: base90(S.current.crop.rot || 0) };
     clampCrop(S.current);
     cropChanged();
   });
@@ -1700,7 +1744,7 @@
   $('#resetBtn').addEventListener('click', () => {
     if (!S.current) return;
     S.current.adj = zeroAdj();
-    S.current.crop = { z: 1, cx: 0.5, cy: 0.5, rot: 0 };
+    S.current.crop = freshCrop(S.current);
     syncControls(); requestRender(); saveItem(S.current);
   });
 
@@ -2493,12 +2537,13 @@
       s = { img, w: img.naturalWidth, h: img.naturalHeight };
     }
     await T.fontsReady(it);
-    const out = R.render(s.img, s.w, s.h, it.crop, it.adj, OUT_W, OUT_H, ASPECT, true);
-    const c = canvas(OUT_W, OUT_H);
+    const { w: OW, h: OH } = outSize(it);
+    const out = R.render(s.img, s.w, s.h, it.crop, it.adj, OW, OH, aspectOf(it), true);
+    const c = canvas(OW, OH);
     const cx = c.getContext('2d');
     cx.drawImage(out, 0, 0);
-    applyVeil(cx, it, OUT_W, OUT_H);
-    T.draw(cx, it, OUT_W, OUT_H);
+    applyVeil(cx, it, OW, OH);
+    T.draw(cx, it, OW, OH);
     const blob = await toBlob(c, 'image/jpeg', 0.95);
     c.width = 0;
     return blob;
@@ -2518,11 +2563,12 @@
       let gain = null;   // el sonido también hace el fundido
       try { const src = ac.createMediaElementSource(v), dst = ac.createMediaStreamDestination(); gain = ac.createGain(); src.connect(gain); gain.connect(dst); audio = dst.stream.getAudioTracks()[0] || null; } catch (e) { console.warn(e); }
       await T.fontsReady(it);
-      const c = canvas(OUT_W, OUT_H), cx = c.getContext('2d'), { a, b } = trimOf(it);
+      const { w: OW, h: OH } = outSize(it);
+      const c = canvas(OW, OH), cx = c.getContext('2d'), { a, b } = trimOf(it);
       const draw = () => {
-        const out = R.render(v, v.videoWidth, v.videoHeight, it.crop, it.adj, OUT_W, OUT_H, ASPECT);
-        cx.drawImage(out, 0, 0); applyVeil(cx, it, OUT_W, OUT_H); T.draw(cx, it, OUT_W, OUT_H);
-        applyFade(cx, it, v.currentTime, OUT_W, OUT_H);
+        const out = R.render(v, v.videoWidth, v.videoHeight, it.crop, it.adj, OW, OH, aspectOf(it));
+        cx.drawImage(out, 0, 0); applyVeil(cx, it, OW, OH); T.draw(cx, it, OW, OH);
+        applyFade(cx, it, v.currentTime, OW, OH);
         if (gain) gain.gain.value = 1 - fadeAlpha(it, v.currentTime);
       };
       await seekVideo(v, a); draw();
@@ -2562,7 +2608,7 @@
       sh.hidden = true;
       const what = btn ? btn.dataset.v : 'cancel';
       if (what === 'cover') {
-        try { toast('Preparando…', true); const blob = await exportItem(it); toast('Lista'); await deliver([new File([blob], `${baseName(it.name)}-portada-1080x1350.jpg`, { type: 'image/jpeg' })]); }
+        try { toast('Preparando…', true); const blob = await exportItem(it); toast('Lista'); await deliver([new File([blob], `${baseName(it.name)}-portada-${outSize(it).w}x${outSize(it).h}.jpg`, { type: 'image/jpeg' })]); }
         catch (e) { console.error(e); toast('No se pudo exportar'); }
         return;
       }
@@ -2578,7 +2624,7 @@
         rs.hidden = true;
         if (!r) { toast('Se canceló la grabación'); return; }
         toast(r.ext === 'mp4' ? 'Video listo' : 'Video listo (formato WebM: este navegador no graba MP4)', false, 5000);
-        await deliver([new File([r.blob], `${baseName(it.name)}-video-1080x1350.${r.ext}`, { type: r.blob.type })]);
+        await deliver([new File([r.blob], `${baseName(it.name)}-video-${outSize(it).w}x${outSize(it).h}.${r.ext}`, { type: r.blob.type })]);
       } catch (e) { console.error(e); rs.hidden = true; toast('No se pudo grabar el video: ' + (e.message || e), false, 8000); }
       finally { if (ac) ac.close().catch(() => { }); }
     };
@@ -2630,7 +2676,7 @@
       toast('Preparando…', true);
       const blob = await exportItem(it);
       toast('Lista');
-      const suffix = it.kind === 'video' ? 'portada-1080x1350' : '1080x1350';
+      const suffix = (it.kind === 'video' ? 'portada-' : '') + outSize(it).w + 'x' + outSize(it).h;
       await deliver([new File([blob], `${baseName(it.name)}-${suffix}.jpg`, { type: 'image/jpeg' })]);
     } catch (e) { console.error(e); toast('No se pudo exportar'); }
   });

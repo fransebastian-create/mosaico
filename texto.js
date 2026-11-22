@@ -11,7 +11,10 @@
 // estilos guardados y colores, que se sincronizan con Drive.
 // =====================================================================
 window.createMosaicoText = function createMosaicoText(A) {
-  const { S, ASPECT, frame, clamp, rad, snapRot, normRot, uid, toast, DB } = A;
+  const { S, frame, clamp, rad, snapRot, normRot, uid, toast, DB } = A;
+  // proporción (ancho / alto) de la publicación que se está editando: 4:5, o 9:16 en los Reels
+  let ASP = A.ASPECT;
+  function syncAspect() { ASP = A.aspectOf(S.current); }
   const $ = s => document.querySelector(s);
 
   // ---------------- tipografías ----------------
@@ -155,7 +158,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   // Dibuja un texto en un contexto donde el cuadro 4:5 tiene alto H y empieza en x0.
   function drawText(ctx, L, x0, H) {
-    const W = H * ASPECT;
+    const W = H * ASP;
     const m = layout(ctx, L, H);
     ensureFont(m.f);
     const sx = L.sx || 1, sy = L.sy || 1;   // ancho y alto: estirar o comprimir la letra
@@ -290,7 +293,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   const isLine = L => !!L && L.type === 'shape' && L.shape === 'line';
   // Línea: L.size = largo (unidades del alto), L.th = grosor, L.rot = ángulo; L.x/L.y = punto medio
   function drawLine(ctx, L, x0, H) {
-    const W = H * ASPECT, w = L.size * H, th = Math.max(0.5, (L.th || 0.006) * H);
+    const W = H * ASP, w = L.size * H, th = Math.max(0.5, (L.th || 0.006) * H);
     L._box = { w: L.size, h: L.th || 0.006 };
     if (L.hidden) return;
     ctx.save();
@@ -306,7 +309,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   function drawShape(ctx, L, x0, H) {
     if (L.shape === 'line') return drawLine(ctx, L, x0, H);
-    const W = H * ASPECT, h = L.size * H, w = L.size * (L.ar || 1) * H;
+    const W = H * ASP, h = L.size * H, w = L.size * (L.ar || 1) * H;
     L._box = { w: w / H, h: h / H };
     if (L.hidden) return;
     ctx.save();
@@ -361,7 +364,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     return c;
   }
   function drawImageLayer(ctx, L, x0, H, preview) {
-    const W = H * ASPECT, e = imageOf(L);
+    const W = H * ASP, e = imageOf(L);
     const ar = L.ar || (e.w ? e.w / e.h : 1), c = cropOf(L);
     const h = L.size * H * (L.sy || 1) * (1 - c.t - c.b), w = L.size * H * ar * (L.sx || 1) * (1 - c.l - c.r);
     L._box = { w: w / H, h: h / H };
@@ -404,7 +407,7 @@ window.createMosaicoText = function createMosaicoText(A) {
         const ar = w / h;
         const L = {
           id: uid(), type: 'image', img: imgId, ar, name: (f.name || 'Imagen').replace(/\.[^.]+$/, '').slice(0, 32),
-          x: 0.5, y: 0.5, rot: 0, opacity: 1, size: Math.min(0.5, 0.8 * ASPECT / ar),
+          x: 0.5, y: 0.5, rot: 0, opacity: 1, size: Math.min(0.5, 0.8 * ASP / ar),
         };
         it.texts = it.texts || [];
         while (it.texts.some(o => Math.abs(o.x - L.x) < 0.01 && Math.abs(o.y - L.y) < 0.01)) L.y = Math.min(0.9, L.y + 0.08);
@@ -428,9 +431,13 @@ window.createMosaicoText = function createMosaicoText(A) {
   // Dibuja todas las capas de una publicación en un lienzo de ow×oh (4:5 o miniatura 3:4).
   function draw(ctx, it, ow, oh, opts = {}) {
     if (!it || !it.texts || !it.texts.length) return;
+    const prevAsp = ASP; ASP = A.aspectOf(it);   // cada publicación con su proporción
+    try { drawLayers(ctx, it, ow, oh, opts); } finally { ASP = prevAsp; }
+  }
+  function drawLayers(ctx, it, ow, oh, opts) {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    const x0 = (ow - oh * ASPECT) / 2;
+    const x0 = (ow - oh * ASP) / 2;
     for (const L of it.texts) {
       if (L.type === 'image') { drawImageLayer(ctx, L, x0, oh, opts.preview); continue; }
       if (L.type === 'shape') { drawShape(ctx, L, x0, oh); continue; }
@@ -505,7 +512,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   // Lo que ocupa cada capa en la publicación (x en fracción del ancho, y del alto), contando el giro.
   function extent(L) {
     const b = L._box || { w: 0, h: 0 }, a = rad(L.rot || 0), c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
-    const hw = (b.w * c + b.h * s) / 2 / ASPECT, hh = (b.w * s + b.h * c) / 2;
+    const hw = (b.w * c + b.h * s) / 2 / ASP, hh = (b.w * s + b.h * c) / 2;
     return { l: L.x - hw, r: L.x + hw, t: L.y - hh, b: L.y + hh };
   }
   const bboxOf = es => ({ l: Math.min(...es.map(e => e.l)), r: Math.max(...es.map(e => e.r)), t: Math.min(...es.map(e => e.t)), b: Math.max(...es.map(e => e.b)) });
@@ -547,7 +554,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   function hideBox() { box.hidden = true; extraBoxes.forEach(b => { b.hidden = true; }); snapV.classList.remove('on'); snapH.classList.remove('on'); }
   const extraBoxes = [];
   function placeBox(el, L) {
-    const Hc = frame.clientHeight, Wc = Hc * ASPECT, pad = 6;
+    const Hc = frame.clientHeight, Wc = Hc * ASP, pad = 6;
     el.hidden = false;
     el.style.left = L.x * Wc + 'px';
     el.style.top = L.y * Hc + 'px';
@@ -578,7 +585,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     const H = rect.height, pad = (matchMedia('(pointer: coarse)').matches ? 18 : 8) / H;
     for (let i = its.length - 1; i >= 0; i--) {
       const L = its[i]; if (!L._box || L.hidden || L.locked) continue;
-      const dx = (px / rect.width - L.x) * ASPECT, dy = py / H - L.y;
+      const dx = (px / rect.width - L.x) * ASP, dy = py / H - L.y;
       const a = -rad(L.rot || 0), lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a);
       if (Math.abs(lx) <= L._box.w / 2 + pad && Math.abs(ly) <= L._box.h / 2 + pad) return L;
     }
@@ -734,7 +741,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       if (e.shiftKey) { const k = Math.max(w / w0, h / h0); w = w0 * k; h = h0 * k; }
       L.size = h; L.ar = w / h;
       const lx = ox + sx * w / 2, ly = oy + sy * h / 2;   // nuevo centro, sin giro
-      L.x = sg.x0 + (lx * Math.cos(a) - ly * Math.sin(a)) / ASPECT; L.y = sg.y0 + lx * Math.sin(a) + ly * Math.cos(a);
+      L.x = sg.x0 + (lx * Math.cos(a) - ly * Math.sin(a)) / ASP; L.y = sg.y0 + lx * Math.sin(a) + ly * Math.cos(a);
     } else if (sg.kind === 'rad') {
       const w = L.size * (L.ar || 1) * H, h = L.size * H;
       const m = ((p.x + w / 2) + (p.y + h / 2)) / 2;
@@ -745,11 +752,11 @@ window.createMosaicoText = function createMosaicoText(A) {
       if (sg.kind === 'r') {
         d = (p.x - sg.p0.x) / H; const wNew = Math.max(0.005, w0 + d); d = wNew - w0;
         L.ar = wNew / h0; L.size = h0;
-        L.x = sg.x0 + (Math.cos(a) * d / 2) / ASPECT; L.y = sg.y0 + Math.sin(a) * d / 2;
+        L.x = sg.x0 + (Math.cos(a) * d / 2) / ASP; L.y = sg.y0 + Math.sin(a) * d / 2;
       } else {
         d = (p.y - sg.p0.y) / H; const hNew = Math.max(0.005, h0 + d); d = hNew - h0;
         L.size = hNew; L.ar = w0 / hNew;
-        L.x = sg.x0 + (-Math.sin(a) * d / 2) / ASPECT; L.y = sg.y0 + Math.cos(a) * d / 2;
+        L.x = sg.x0 + (-Math.sin(a) * d / 2) / ASP; L.y = sg.y0 + Math.cos(a) * d / 2;
       }
     }
     changed(); syncPanelValues();
@@ -766,11 +773,11 @@ window.createMosaicoText = function createMosaicoText(A) {
 
   // ---- líneas: arrastrar cada punta; Mayúscula traba el ángulo de a 45°, y el imán la pega a otras formas y a la publicación ----
   const magDot = layer.querySelector('.tmag');
-  const lineEnds = L => { const a = rad(L.rot || 0), hx = Math.cos(a) * L.size / 2, hy = Math.sin(a) * L.size / 2, X = L.x * ASPECT; return [{ x: X - hx, y: L.y - hy }, { x: X + hx, y: L.y + hy }]; };   // en unidades del alto
+  const lineEnds = L => { const a = rad(L.rot || 0), hx = Math.cos(a) * L.size / 2, hy = Math.sin(a) * L.size / 2, X = L.x * ASP; return [{ x: X - hx, y: L.y - hy }, { x: X + hx, y: L.y + hy }]; };   // en unidades del alto
   const nearSeg = (p, a, b) => { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy, t = l2 ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0, 1) : 0; return { x: a.x + t * dx, y: a.y + t * dy }; };
   // puntos y bordes a los que se puede pegar una punta (todo en unidades del alto)
   function magnetTargets(self) {
-    const pts = [], segs = [], A_ = ASPECT;
+    const pts = [], segs = [], A_ = ASP;
     const corners = [{ x: 0, y: 0 }, { x: A_, y: 0 }, { x: A_, y: 1 }, { x: 0, y: 1 }];
     pts.push(...corners, { x: A_ / 2, y: 0 }, { x: A_, y: 0.5 }, { x: A_ / 2, y: 1 }, { x: 0, y: 0.5 }, { x: A_ / 2, y: 0.5 });
     corners.forEach((c, i) => segs.push([c, corners[(i + 1) % 4]]));
@@ -833,7 +840,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       const a = eg.k === 0 ? P : fixed, b = eg.k === 0 ? fixed : P;
       L.size = Math.max(0.002, Math.hypot(b.x - a.x, b.y - a.y));
       L.rot = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
-      L.x = (a.x + b.x) / 2 / ASPECT; L.y = (a.y + b.y) / 2;
+      L.x = (a.x + b.x) / 2 / ASP; L.y = (a.y + b.y) / 2;
       changed(); syncPanelValues();
     });
     const end = e => { if (eg && eg.id === e.pointerId) { eg = null; frame.classList.remove('dragging'); showMag(null); } };
@@ -888,7 +895,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyLayer(L); e.preventDefault(); return true; }
     if (mv && !mod) {
       const ls = group().filter(x => !x.locked); if (!ls.length) return false;
-      for (const x of ls) { x.x = clamp(x.x + mv[0] / ASPECT, 0, 1); x.y = clamp(x.y + mv[1], 0, 1); }
+      for (const x of ls) { x.x = clamp(x.x + mv[0] / ASP, 0, 1); x.y = clamp(x.y + mv[1], 0, 1); }
       changed(); e.preventDefault(); return true;
     }
     return false;
@@ -1129,10 +1136,10 @@ window.createMosaicoText = function createMosaicoText(A) {
     });
   }
   const pctW = v => (v / 10).toFixed(1) + '%';
-  slider($('#tSizeRot'), { label: 'Ancho', min: 10, max: 2000, get: L => Math.round((L.size || 0) * (L.ar || 1) / ASPECT * 1000), set: (L, v) => { const h = L.size || 0.25; L.ar = Math.max(0.005, (v / 1000) * ASPECT / h); }, fmt: pctW, cls: 'shape-only no-line' });
+  slider($('#tSizeRot'), { label: 'Ancho', min: 10, max: 2000, get: L => Math.round((L.size || 0) * (L.ar || 1) / ASP * 1000), set: (L, v) => { const h = L.size || 0.25; L.ar = Math.max(0.005, (v / 1000) * ASP / h); }, fmt: pctW, cls: 'shape-only no-line' });
   slider($('#tSizeRot'), { label: 'Alto', min: 10, max: 2000, get: L => Math.round((L.size || 0) * 1000), set: (L, v) => { const wv = (L.size || 0.25) * (L.ar || 1); L.size = Math.max(0.001, v / 1000); L.ar = wv / L.size; }, fmt: pctW, cls: 'shape-only no-line' });
   slider($('#tSizeRot'), { label: 'Largo', min: 5, max: 2000, get: L => Math.round((L.size || 0) * 1000), set: (L, v) => { L.size = v / 1000; }, fmt: pctW, cls: 'shape-only line-only' });
-  const thPx = v => { const px = v / 2000 * 1080 / ASPECT; return (px < 10 ? px.toFixed(1) : Math.round(px)) + ' px'; };
+  const thPx = v => { const px = v / 2000 * 1080 / ASP; return (px < 10 ? px.toFixed(1) : Math.round(px)) + ' px'; };
   slider($('#tSizeRot'), { label: 'Grosor', min: 1, max: 160, get: L => Math.round((L.th || 0.006) * 2000), set: (L, v) => { L.th = v / 2000; }, fmt: thPx, cls: 'shape-only line-only' });
   slider($('#tSizeRot'), { label: 'Redondear bordes', min: 0, max: 100, get: L => Math.round((L.radius || 0) * 100), set: (L, v) => { L.radius = v / 100; if (!v) delete L.radius; }, fmt: pct, cls: 'shape-only rect-only no-line' });
   // Recorte de imágenes: lo que queda no se mueve ni cambia de tamaño en la pantalla; sólo se va el borde.
@@ -1144,7 +1151,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     after[side] = Math.min(v / 1000, 0.98 - after[opp]);
     const [x0, y0] = ctr(before), [x1, y1] = ctr(after), a = rad(L.rot || 0);
     const dx = x1 - x0, dy = y1 - y0;
-    L.x += (dx * Math.cos(a) - dy * Math.sin(a)) / ASPECT;
+    L.x += (dx * Math.cos(a) - dy * Math.sin(a)) / ASP;
     L.y += dx * Math.sin(a) + dy * Math.cos(a);
     const k = 'c' + side;
     if (after[side] > 0) L[k] = after[side]; else delete L[k];
@@ -1521,7 +1528,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
 
   return {
-    init, draw, fontsReady, afterPreview, add, deselect, select,
+    init, draw, fontsReady, afterPreview, syncAspect, add, deselect, select,
     pointerDown, pointerMove, pointerUp, wheel, macGesture, dblclick, keydown,
     onItemChanged() { if (sel) select(null); },
     refresh() { if (sel && !cur()) select(null); else { syncPanel(); } renderLayers(); },
