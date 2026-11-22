@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.22';
+  const VERSION = 'v1.23';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -2599,9 +2599,97 @@
       closeVideo(v);
     }
   }
+  // ---- descargar el video cuadro por cuadro (WebCodecs): no se saltea ningún cuadro, aunque tarde más ----
+  let muxLib = null;
+  function loadMuxer() {
+    return muxLib ||= new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.js';
+      s.onload = () => window.Mp4Muxer ? res(window.Mp4Muxer) : rej(new Error('armador de MP4 no disponible'));
+      s.onerror = () => { muxLib = null; rej(new Error('no se pudo cargar el armador de MP4 (¿sin internet?)')); };
+      document.head.append(s);
+    });
+  }
+  const canFrameExport = () => typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined';
+  async function pickVideoCodec(w, h) {
+    for (const codec of ['avc1.640028', 'avc1.64002a', 'avc1.4d0028', 'avc1.42e028']) {
+      const cfg = { codec, width: w, height: h, bitrate: 14e6, framerate: 30, avc: { format: 'avc' } };
+      try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) return cfg; } catch { }
+    }
+    return null;
+  }
+  // el sonido del pedazo elegido, con los fundidos, ya codificado en AAC
+  async function encodeAudio(it, buf, muxer, a, b) {
+    const sr = buf.sampleRate, ch = Math.min(2, buf.numberOfChannels);
+    const cfg = { codec: 'mp4a.40.2', sampleRate: sr, numberOfChannels: ch, bitrate: 192000 };
+    const enc = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: e => console.error(e) });
+    enc.configure(cfg);
+    const s0 = Math.floor(a * sr), s1 = Math.min(buf.length, Math.floor(b * sr)), N = 1024;
+    const chans = [...Array(ch)].map((_, k) => buf.getChannelData(k));
+    for (let p = s0; p < s1; p += N) {
+      const n = Math.min(N, s1 - p), data = new Float32Array(n * ch);
+      for (let k = 0; k < ch; k++) for (let j = 0; j < n; j++) data[k * n + j] = chans[k][p + j] * (1 - fadeAlpha(it, (p + j) / sr));
+      const ad = new AudioData({ format: 'f32-planar', sampleRate: sr, numberOfFrames: n, numberOfChannels: ch, timestamp: Math.round((p - s0) / sr * 1e6), data });
+      enc.encode(ad); ad.close();
+    }
+    await enc.flush(); enc.close();
+    return true;
+  }
+  async function exportVideoFrames(it, job) {
+    const vblob = await getVideoBlob(it); if (!vblob) throw new Error('no se encontró el video');
+    const { w: OW, h: OH } = outSize(it), FPS = 30;
+    const vcfg = await pickVideoCodec(OW, OH);
+    if (!vcfg) return null;   // sin codificador: se usa la grabación en tiempo real
+    const Mp4Muxer = await loadMuxer();
+    if (vidPlaying()) vidPause();
+    await T.fontsReady(it);
+    const { a, b } = trimOf(it);
+    // ¿tiene sonido? (se decide antes de armar el MP4)
+    let audioInfo = null, abuf = null;
+    try {
+      if (typeof AudioEncoder !== 'undefined') {
+        const AC = window.AudioContext || window.webkitAudioContext, ac = new AC();
+        abuf = await ac.decodeAudioData(await vblob.arrayBuffer()); ac.close().catch(() => { });
+        const cfg = { codec: 'mp4a.40.2', sampleRate: abuf.sampleRate, numberOfChannels: Math.min(2, abuf.numberOfChannels), bitrate: 192000 };
+        if ((await AudioEncoder.isConfigSupported(cfg)).supported) audioInfo = { sampleRate: cfg.sampleRate, numberOfChannels: cfg.numberOfChannels };
+      }
+    } catch { audioInfo = null; }   // sin sonido (o un formato que el navegador no lee)
+    const target = new Mp4Muxer.ArrayBufferTarget();
+    const muxer = new Mp4Muxer.Muxer({
+      target, fastStart: 'in-memory', firstTimestampBehavior: 'offset',
+      video: { codec: 'avc', width: OW, height: OH, frameRate: FPS },
+      ...(audioInfo ? { audio: { codec: 'aac', ...audioInfo } } : {}),
+    });
+    let encErr = null;
+    const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: e => { encErr = e; } });
+    enc.configure(vcfg);
+    const v = await openVideo(vblob);
+    try {
+      const c = canvas(OW, OH), cx = c.getContext('2d');
+      const total = Math.max(1, Math.round((b - a) * FPS));
+      for (let i = 0; i < total; i++) {
+        if (job.cancel) break;
+        if (encErr) throw encErr;
+        const t = a + i / FPS;
+        await seekVideo(v, t);
+        const out = R.render(v, v.videoWidth, v.videoHeight, it.crop, it.adj, OW, OH, aspectOf(it));
+        cx.drawImage(out, 0, 0); applyVeil(cx, it, OW, OH); T.draw(cx, it, OW, OH); applyFade(cx, it, t, OW, OH);
+        const fr = new VideoFrame(c, { timestamp: Math.round(i * 1e6 / FPS), duration: Math.round(1e6 / FPS) });
+        enc.encode(fr, { keyFrame: i % (FPS * 2) === 0 }); fr.close();
+        while (enc.encodeQueueSize > 4) await new Promise(r => setTimeout(r, 5));
+        job.progress((i + 1) / total * (audioInfo ? 0.95 : 1));
+      }
+      await enc.flush(); enc.close();
+      if (job.cancel) return { canceled: true };
+      if (audioInfo) await encodeAudio(it, abuf, muxer, a, b);
+      muxer.finalize();
+      job.progress(1);
+      return { blob: new Blob([target.buffer], { type: 'video/mp4' }), ext: 'mp4' };
+    } finally { closeVideo(v); try { if (enc.state !== 'closed') enc.close(); } catch { } }
+  }
   function openVidDownload(it) {
     const sh = $('#vidDlSheet'), { a, b } = trimOf(it);
-    $('#vidDlNote').textContent = `Se graba en tiempo real: tarda lo mismo que el video (${(b - a).toFixed(1).replace('.', ',')} s). No cambies de pestaña mientras tanto.`;
+    $('#vidDlNote').textContent = `Se arma cuadro por cuadro (${(b - a).toFixed(1).replace('.', ',')} s de video): puede tardar un poco más que el video, pero no se saltea nada.`;
     sh.hidden = false;
     sh.onclick = async e => {
       const btn = e.target.closest('[data-v]'); if (!btn && e.target !== sh) return;
@@ -2620,7 +2708,13 @@
       job.progress(0); rs.hidden = false;
       $('#recCancel').onclick = () => { job.cancel = true; };
       try {
-        const r = await exportVideo(it, ac, job);
+        let r = null;
+        if (canFrameExport()) {   // cuadro por cuadro: parejo, sin saltos
+          try { r = await exportVideoFrames(it, job); }
+          catch (e) { console.error(e); if (job.cancel) r = { canceled: true }; else { r = null; toast('Probando el otro método de grabación…', true); } }
+          if (r && r.canceled) r = null, job.cancel = true;
+        }
+        if (!r && !job.cancel) { job.progress(0); r = await exportVideo(it, ac, job); }   // método de antes (en tiempo real)
         rs.hidden = true;
         if (!r) { toast('Se canceló la grabación'); return; }
         toast(r.ext === 'mp4' ? 'Video listo' : 'Video listo (formato WebM: este navegador no graba MP4)', false, 5000);
