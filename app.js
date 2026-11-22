@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.24';
+  const VERSION = 'v1.25';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -677,7 +677,7 @@
   function drawThumb(it) {
     if (!it.thumb || !R || (!it.canvas && !it.stripCanvas)) return;
     if (!it.canvas) it.canvas = canvas(1, 1);   // diapositiva de un carrusel: sólo se ve en la tira
-    const cw = 360, ch = Math.round(cw / S.gridAspect);
+    const cw = thumbW(), ch = Math.round(cw / S.gridAspect);
     // la miniatura de la grilla muestra la portada, no el cuadro donde está corriendo el video
     const vs = S.video && S.video.id === it.id && (vidPlaying() || Math.abs(S.video.v.currentTime - (it.t || 0)) > 0.05) ? null : videoSource(it);
     const src = vs || { img: it.thumb, w: it.thumb.naturalWidth, h: it.thumb.naturalHeight };
@@ -761,6 +761,28 @@
     },
   }) : null;
 
+  // ---- tamaño de la grilla (compu): por defecto el ancho de un iPhone; se agranda o achica manteniendo las proporciones ----
+  const GRID_W = [320, 390, 480, 600, 780];   // 390 = iPhone
+  let gridWi = 1;
+  try { const v = +localStorage.getItem('mosaico.gridW'); if (GRID_W.includes(v)) gridWi = GRID_W.indexOf(v); } catch { }
+  // resolución de las miniaturas según lo grandes que se vean (nítidas también agrandadas)
+  function thumbW() { const tile = (isNarrow() ? innerWidth : GRID_W[gridWi]) / 3; return clamp(Math.round(tile * (window.devicePixelRatio || 1) / 2) * 2, 240, 560); }
+  function applyGridW(redraw) {
+    document.documentElement.style.setProperty('--gw', GRID_W[gridWi] + 'px');
+    $('#gridMinus').disabled = gridWi === 0; $('#gridPlus').disabled = gridWi === GRID_W.length - 1;
+    $('#gridSize').classList.toggle('on', gridWi !== 1);
+    if (redraw) { for (const it of S.items.values()) drawThumb(it); fitFrame(); }
+  }
+  function stepGridW(d) {
+    const i = clamp(gridWi + d, 0, GRID_W.length - 1); if (i === gridWi) return;
+    gridWi = i; try { localStorage.setItem('mosaico.gridW', String(GRID_W[i])); } catch { }
+    applyGridW(true);
+    toast(i === 1 ? 'Grilla del tamaño de un iPhone' : `Grilla ${i < 1 ? 'más chica' : 'más grande'} (${(GRID_W[i] / 390).toFixed(2).replace(/\.?0+$/, '').replace('.', ',')}× un iPhone)`);
+  }
+  $('#gridMinus').addEventListener('click', () => stepGridW(-1));
+  $('#gridPlus').addEventListener('click', () => stepGridW(1));
+  $('#gridSize').addEventListener('click', () => { if (gridWi !== 1) stepGridW(1 - gridWi); });
+  applyGridW(false);
   $('#viewToggle').addEventListener('click', e => {
     S.gridAspect = S.gridAspect === GRID_ASPECT ? ASPECT : GRID_ASPECT;
     e.currentTarget.textContent = S.gridAspect === GRID_ASPECT ? '3:4' : '4:5';

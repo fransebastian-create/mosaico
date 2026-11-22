@@ -668,3 +668,21 @@ body.is-video #sliders .tint, body.is-video #sliders .vibrance, body.is-video #s
 .rg-ui.bottom { left: 0; right: 0; bottom: 0; height: 22%; }
 .rg-ui.right { right: 0; width: 14%; top: 45%; bottom: 22%; }
 #vidFmtRow .seg { flex: none; }
+
+/* grilla como Instagram en el iPhone: 3 columnas, miniaturas 3:4 y líneas finitas; en la compu, del ancho de un iPhone (agrandable) */
+.grid { gap: 1px; }
+#gridPane { position: relative; }
+.gsize { position: absolute; right: 12px; bottom: 58px; z-index: 3; display: inline-flex; border-radius: 999px; overflow: hidden;
+  background: rgba(20,20,20,.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 2px 8px rgba(0,0,0,.35); opacity: .55; transition: opacity .15s; }
+#gridPane:hover .gsize { opacity: 1; }
+.gsize button { border: 0; background: none; color: #fff; font-size: 13px; padding: 6px 10px; cursor: pointer; }
+.gsize button + button { border-left: 1px solid rgba(255,255,255,.18); }
+.gsize button:disabled { opacity: .3; cursor: default; }
+.gsize #gridSize { font-size: 11px; }
+.gsize #gridSize.on { color: #ffd34d; }
+@media (max-width: 899px) { .gsize { display: none; } }
+.vid-ctl[hidden], .trim-row[hidden] { display: none !important; }
+@media (min-width: 900px) {
+  #app { grid-template-columns: max(440px, calc(var(--gw, 390px) + 24px)) 1fr; }
+  #gridPane .grid { width: var(--gw, 390px); max-width: 100%; margin: 0 auto; gap: calc(var(--gw, 390px) / 390); }
+}
