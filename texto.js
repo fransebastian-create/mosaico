@@ -424,6 +424,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   imgInput.addEventListener('change', () => { const fs = [...imgInput.files]; imgInput.value = ''; if (fs.length) addImageFiles(fs); });
   const isImg = L => !!L && L.type === 'image';
   const isShape = L => !!L && L.type === 'shape';
+  const isTxt = L => !!L && !L.type;   // capa de texto
   const maxSize = L => (isImg(L) || isShape(L) ? 3 : 0.6);
 
   // Modos de fusión (como en Photoshop). La clave es el nombre que entiende el navegador.
@@ -571,7 +572,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!L || !L._box) { box.hidden = true; return; }
     placeBox(box, L);
     box.classList.toggle('multi', isMulti());
-    box.classList.toggle('shape', isShape(L)); box.classList.toggle('ellipse', isShape(L) && L.shape === 'ellipse'); box.classList.toggle('line', isLine(L)); handle.title = isShape(L) ? 'Arrastrá para girar' : 'Arrastrá para agrandar y girar';
+    box.classList.toggle('shape', isShape(L)); box.classList.toggle('ellipse', isShape(L) && L.shape === 'ellipse'); box.classList.toggle('line', isLine(L)); box.classList.toggle('txt', isTxt(L)); handle.title = isImg(L) ? 'Arrastrá para agrandar y girar' : 'Arrastrá para girar';
     if (isShape(L)) {   // tirador de redondeo: más adentro cuanto más redondeado
       const Hc = frame.clientHeight, w = L.size * (L.ar || 1) * Hc, h = L.size * Hc;
       const m = 12 + (L.radius || 0) * Math.min(w, h) * 0.35;
@@ -706,7 +707,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!hg || hg.id !== e.pointerId) return;
     e.stopPropagation();
     const d = Math.hypot(e.clientX - hg.cx, e.clientY - hg.cy), a = Math.atan2(e.clientY - hg.cy, e.clientX - hg.cx) * 180 / Math.PI;
-    if (!isShape(hg.L)) hg.L.size = clamp(hg.size0 * d / hg.d0, 0.012, maxSize(hg.L));   // en las formas sólo gira (las esquinas agrandan)
+    if (isImg(hg.L)) hg.L.size = clamp(hg.size0 * d / hg.d0, 0.012, maxSize(hg.L));   // en formas y textos sólo gira (las esquinas agrandan)
     hg.L.rot = snapRot(normRot(hg.rot0 + normRot(a - hg.a0)));
     changed(); syncPanelValues();
   });
@@ -722,17 +723,26 @@ window.createMosaicoText = function createMosaicoText(A) {
     return { x: dx * Math.cos(a) - dy * Math.sin(a), y: dx * Math.sin(a) + dy * Math.cos(a), H: rect.height };
   };
   function sideStart(kind, e) {
-    const L = cur(); if (!L || !isShape(L) || L.locked || isMulti()) return;
+    const L = cur(); if (!L || L.locked || isMulti()) return;
+    if (!isShape(L) && !(isTxt(L) && kind.length === 2)) return;   // los textos sólo tienen las esquinas
     e.stopPropagation(); e.preventDefault();
     try { e.target.setPointerCapture(e.pointerId); } catch { }
-    sg = { kind, id: e.pointerId, L, p0: localPt(L, e), size0: L.size, ar0: L.ar || 1, x0: L.x, y0: L.y };
+    sg = { kind, id: e.pointerId, L, p0: localPt(L, e), size0: L.size, ar0: L.ar || 1, x0: L.x, y0: L.y, box0: L._box ? { ...L._box } : null };
     frame.classList.add('dragging');
   }
   function sideMove(e) {
     if (!sg || sg.id !== e.pointerId) return;
     e.stopPropagation();
     const { L } = sg, p = sg.kind === 'rad' ? localPt(L, e) : localPt(L, e, sg.x0, sg.y0), H = p.H, a = rad(L.rot || 0);
-    if (sg.kind.length === 2) {   // esquina: la opuesta queda quieta
+    if (sg.kind.length === 2 && isTxt(L) && sg.box0) {   // texto: agranda o achica la letra en proporción; la esquina opuesta queda quieta
+      const sx = sg.kind[1] === 'r' ? 1 : -1, sy = sg.kind[0] === 'b' ? 1 : -1;
+      const w0 = sg.box0.w, h0 = sg.box0.h, ox = -sx * w0 / 2, oy = -sy * h0 / 2, dx0 = sx * w0, dy0 = sy * h0;
+      const cx = sx * w0 / 2 + (p.x - sg.p0.x) / H, cy = sy * h0 / 2 + (p.y - sg.p0.y) / H;
+      const k0 = ((cx - ox) * dx0 + (cy - oy) * dy0) / (dx0 * dx0 + dy0 * dy0);   // cuánto creció la diagonal
+      L.size = clamp(sg.size0 * k0, 0.012, maxSize(L));
+      const k = L.size / sg.size0, lx = ox + dx0 * k / 2, ly = oy + dy0 * k / 2;
+      L.x = sg.x0 + (lx * Math.cos(a) - ly * Math.sin(a)) / ASP; L.y = sg.y0 + lx * Math.sin(a) + ly * Math.cos(a);
+    } else if (sg.kind.length === 2) {   // esquina: la opuesta queda quieta
       const sx = sg.kind[1] === 'r' ? 1 : -1, sy = sg.kind[0] === 'b' ? 1 : -1;
       const w0 = sg.size0 * sg.ar0, h0 = sg.size0;
       const ox = -sx * w0 / 2, oy = -sy * h0 / 2;   // esquina opuesta (unidades del alto, desde el centro inicial)
