@@ -549,7 +549,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   // ---- recuadro de selección y guías ----
   const layer = document.createElement('div'); layer.className = 'tlayer';
-  layer.innerHTML = '<div class="tsnap v"></div><div class="tsnap h"></div><div class="tbox" hidden><div class="thandle" title="Arrastrá para agrandar y girar"></div><div class="tside r" title="Arrastrá para cambiar el ancho"></div><div class="tside b" title="Arrastrá para cambiar el alto"></div><div class="trad" title="Arrastrá hacia adentro para redondear los bordes"></div><div class="tcorner tl"></div><div class="tcorner tr"></div><div class="tcorner bl"></div><div class="tcorner br"></div><div class="tend a" title="Arrastrá la punta (Mayúscula: recta o a 45° · Alt: sin imán)"></div><div class="tend b" title="Arrastrá la punta (Mayúscula: recta o a 45° · Alt: sin imán)"></div></div><div class="tmag"></div>';
+  layer.innerHTML = '<div class="tsnap v"></div><div class="tsnap h"></div><div class="tbox" hidden><div class="thandle" title="Arrastrá para agrandar y girar"></div><div class="tside r" title="Arrastrá para cambiar el ancho"></div><div class="tside b" title="Arrastrá para cambiar el alto"></div><div class="tside l" title="Arrastrá para cambiar el ancho"></div><div class="tside t" title="Arrastrá para cambiar el alto"></div><div class="trad" title="Arrastrá hacia adentro para redondear los bordes"></div><div class="tcorner tl"></div><div class="tcorner tr"></div><div class="tcorner bl"></div><div class="tcorner br"></div><div class="tend a" title="Arrastrá la punta (Mayúscula: recta o a 45° · Alt: sin imán)"></div><div class="tend b" title="Arrastrá la punta (Mayúscula: recta o a 45° · Alt: sin imán)"></div></div><div class="tmag"></div>';
   frame.append(layer);
   const box = layer.querySelector('.tbox'), handle = layer.querySelector('.thandle');
   const sideR = layer.querySelector('.tside.r'), sideB = layer.querySelector('.tside.b'), radH = layer.querySelector('.trad');
@@ -827,14 +827,15 @@ window.createMosaicoText = function createMosaicoText(A) {
     } else {
       const w0 = sg.size0 * sg.ar0, h0 = sg.size0;   // en unidades del alto
       let d;   // cuánto se estiró (en unidades del alto), y el centro se corre la mitad para que el otro lado no se mueva
-      if (sg.kind === 'r') {
-        d = (p.x - sg.p0.x) / H; const wNew = Math.max(0.005, w0 + d); d = wNew - w0;
+      const sgn = sg.kind === 'l' || sg.kind === 't' ? -1 : 1;   // izquierda / arriba: se estira hacia el otro lado
+      if (sg.kind === 'r' || sg.kind === 'l') {
+        d = sgn * (p.x - sg.p0.x) / H; const wNew = Math.max(0.005, w0 + d); d = wNew - w0;
         L.ar = wNew / h0; L.size = h0;
-        L.x = sg.x0 + (Math.cos(a) * d / 2) / ASP; L.y = sg.y0 + Math.sin(a) * d / 2;
+        L.x = sg.x0 + (sgn * Math.cos(a) * d / 2) / ASP; L.y = sg.y0 + sgn * Math.sin(a) * d / 2;
       } else {
-        d = (p.y - sg.p0.y) / H; const hNew = Math.max(0.005, h0 + d); d = hNew - h0;
+        d = sgn * (p.y - sg.p0.y) / H; const hNew = Math.max(0.005, h0 + d); d = hNew - h0;
         L.size = hNew; L.ar = w0 / hNew;
-        L.x = sg.x0 + (-Math.sin(a) * d / 2) / ASP; L.y = sg.y0 + Math.cos(a) * d / 2;
+        L.x = sg.x0 + (sgn * -Math.sin(a) * d / 2) / ASP; L.y = sg.y0 + sgn * Math.cos(a) * d / 2;
       }
     }
     changed(); syncPanelValues();
@@ -842,7 +843,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   const sideEnd = e => { if (sg && sg.id === e.pointerId) { sg = null; frame.classList.remove('dragging'); } };
   const CORNER_TIP = 'Arrastrá para agrandar o achicar (con Mayúscula mantiene la proporción)';
   layer.querySelectorAll('.tcorner').forEach(el => { el.title = CORNER_TIP; });
-  [[sideR, 'r'], [sideB, 'b'], [radH, 'rad'], ...[...layer.querySelectorAll('.tcorner')].map(el => [el, el.classList[1]])].forEach(([el, k]) => {
+  [[sideR, 'r'], [sideB, 'b'], [layer.querySelector('.tside.l'), 'l'], [layer.querySelector('.tside.t'), 't'], [radH, 'rad'], ...[...layer.querySelectorAll('.tcorner')].map(el => [el, el.classList[1]])].forEach(([el, k]) => {
     el.addEventListener('pointerdown', e => sideStart(k, e));
     el.addEventListener('pointermove', sideMove);
     el.addEventListener('pointerup', sideEnd);

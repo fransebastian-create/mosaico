@@ -577,6 +577,8 @@ body.has-banner { --bh: 44px; }
 .tbox.shape:not(.multi):not(.locked) .tside, .tbox.shape:not(.multi):not(.locked):not(.ellipse) .trad { display: block; }
 .tside.r { right: -6px; top: 50%; width: 10px; height: 26px; margin-top: -13px; border-radius: 5px; cursor: ew-resize; }
 .tside.b { bottom: -6px; left: 50%; width: 26px; height: 10px; margin-left: -13px; border-radius: 5px; cursor: ns-resize; }
+.tside.l { left: -6px; top: 50%; width: 10px; height: 26px; margin-top: -13px; border-radius: 5px; cursor: ew-resize; }
+.tside.t { top: -6px; left: 50%; width: 26px; height: 10px; margin-left: -13px; border-radius: 5px; cursor: ns-resize; }
 .trad { width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #ffd34d; cursor: nwse-resize; }
 .tcorner { display: none; position: absolute; width: 12px; height: 12px; pointer-events: auto; touch-action: none; background: #fff; border: 1.5px solid #1c1b1a; border-radius: 2px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
 .tbox.shape:not(.multi):not(.locked) .tcorner, .tbox.txt:not(.multi):not(.locked) .tcorner { display: block; }
@@ -599,7 +601,7 @@ body.has-banner { --bh: 44px; }
 .tmag.on { opacity: 1; } .tmag.edge { width: 10px; height: 10px; margin: -5px 0 0 -5px; }
 #textPanel.is-line .no-line, #textPanel:not(.is-line) .line-only { display: none !important; }
 @media (pointer: coarse) { .tend { width: 22px; height: 22px; margin-top: -11px; } .tend.a { left: -5px; } .tend.b { right: -5px; } }
-@media (pointer: coarse) { .tside.r { width: 14px; height: 34px; margin-top: -17px; right: -8px; } .tside.b { width: 34px; height: 14px; margin-left: -17px; bottom: -8px; } .trad { width: 18px; height: 18px; margin: -9px 0 0 -9px; } }
+@media (pointer: coarse) { .tside.r { width: 14px; height: 34px; margin-top: -17px; right: -8px; } .tside.b { width: 34px; height: 14px; margin-left: -17px; bottom: -8px; } .tside.l { width: 14px; height: 34px; margin-top: -17px; left: -8px; } .tside.t { width: 34px; height: 14px; margin-left: -17px; top: -8px; } .trad { width: 18px; height: 18px; margin: -9px 0 0 -9px; } }
 
 /* aviso de versión nueva */
 .upd-pill { position: fixed; left: 50%; bottom: calc(70px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 55;
