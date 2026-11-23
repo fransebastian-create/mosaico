@@ -442,6 +442,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     for (const L of it.texts) {
       if (L.type === 'image') { drawImageLayer(ctx, L, x0, oh, opts.preview); continue; }
       if (L.type === 'shape') { drawShape(ctx, L, x0, oh); continue; }
+      if (opts.preview && L.id === editingId) { const m = layout(ctx, L, oh); L._box = { w: m.maxW * (L.sx || 1) / oh, h: m.h * (L.sy || 1) / oh }; continue; }   // se está escribiendo encima
       if (L.hidden) { if (!L._box) { const m = layout(ctx, L, oh); L._box = { w: m.maxW * (L.sx || 1) / oh, h: m.h * (L.sy || 1) / oh }; } continue; }
       drawText(ctx, L, x0, oh);
     }
@@ -474,7 +475,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     it.texts.push(L);
     select(L.id);
     changed();
-    setTimeout(() => { const ta = $('#tText'); ta.focus(); ta.select(); }, 30);
+    setTimeout(() => startInline(L, true), 30);   // se escribe directo sobre la publicación, con "Tu texto" ya marcado
   }
   const isMulti = () => multi.size >= 2;
   const group = () => { const ts = (S.current && S.current.texts) || []; return isMulti() ? ts.filter(L => multi.has(L.id)) : (cur() ? [cur()] : []); };
@@ -487,6 +488,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     setSel(multi.has(id) ? id : [...multi].pop());
   }
   function setSel(id) {
+    if (editingId && id !== editingId) endInline();
     if (id !== fitId) fitId = null;
     sel = id;
     if (!id) { multi.clear(); pickMany = false; }
@@ -565,6 +567,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     el.classList.toggle('locked', !!L.locked); el.classList.toggle('off', !!L.hidden);
   }
   function afterPreview() {
+    if (editingId) placeInline();
     const L = cur();
     const others = isMulti() ? group().filter(x => x !== L && x._box) : [];
     while (extraBoxes.length < others.length) { const b = document.createElement('div'); b.className = 'tbox extra'; layer.append(b); extraBoxes.push(b); }
@@ -705,7 +708,58 @@ window.createMosaicoText = function createMosaicoText(A) {
     }
     return true;
   }
-  function focusText() { const ta = $('#tText'); ta.focus(); ta.select(); }
+  function focusText() { const L = cur(); if (isTxt(L)) startInline(L, true); else { const ta = $('#tText'); ta.focus(); ta.select(); } }
+  // ---- escribir directo sobre la publicación ----
+  let editingId = null;
+  const inl = document.createElement('textarea');
+  inl.className = 'tinline'; inl.spellcheck = false; inl.setAttribute('autocapitalize', 'off'); inl.hidden = true;
+  const measureCtx = document.createElement('canvas').getContext('2d');
+  function placeInline() {
+    const L = editingId && cur(); if (!L || L.id !== editingId) return;
+    const Hc = frame.clientHeight, Wc = Hc * ASP, m = layout(measureCtx, L, Hc);
+    const f = m.f, cm = L.caseMode;
+    inl.style.font = fontCSS(f, m.fontPx);
+    inl.style.letterSpacing = m.track + 'px';
+    inl.style.lineHeight = m.lineH + 'px';
+    inl.style.textAlign = L.align || 'center';
+    inl.style.color = L.color || '#ffffff';
+    inl.style.caretColor = L.color || '#ffffff';
+    inl.style.textTransform = cm === 'upper' ? 'uppercase' : cm === 'lower' ? 'lowercase' : cm === 'title' ? 'capitalize' : 'none';
+    const n = m.lines.length, w = m.maxW + Math.max(4, m.track + 2), h = n * m.lineH;
+    inl.style.width = w + 'px'; inl.style.height = h + 'px';
+    inl.style.left = L.x * Wc + 'px'; inl.style.top = L.y * Hc + 'px';
+    inl.style.transform = `translate(-50%, -50%) rotate(${L.rot || 0}deg) scale(${L.sx || 1}, ${L.sy || 1})`;
+    inl.style.opacity = clamp(L.opacity ?? 1, 0.15, 1);
+  }
+  function startInline(L, selectAll) {
+    if (!isTxt(L) || L.locked) return;
+    if (editingId && editingId !== L.id) endInline();
+    if (sel !== L.id) select(L.id);
+    editingId = L.id;
+    if (!inl.isConnected) layer.append(inl);
+    inl.hidden = false; inl.value = L.text || '';
+    box.classList.add('editing');
+    placeInline(); A.requestRender();
+    inl.focus();
+    if (selectAll) inl.select(); else inl.setSelectionRange(inl.value.length, inl.value.length);
+  }
+  function endInline() {
+    if (!editingId) return;
+    editingId = null; inl.hidden = true; box.classList.remove('editing');
+    if (document.activeElement === inl) inl.blur();
+    A.requestRender(); renderLayersSoon();
+  }
+  inl.addEventListener('input', () => {
+    const L = cur(); if (!L || L.id !== editingId) return;
+    L.text = inl.value; changed(); placeInline();
+    const ta = $('#tText'); if (ta && document.activeElement !== ta) ta.value = L.text;
+  });
+  inl.addEventListener('keydown', e => {
+    e.stopPropagation();   // que las flechas, la barra y Borrar escriban, no muevan la capa
+    if (e.key === 'Escape') { e.preventDefault(); endInline(); }
+  });
+  inl.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== inl) endInline(); }, 0));
+  ['pointerdown', 'pointermove', 'pointerup', 'dblclick', 'wheel'].forEach(ev => inl.addEventListener(ev, e => e.stopPropagation()));
   // agarrar la esquina: agrandar y girar con un dedo
   let hg = null;
   handle.addEventListener('pointerdown', e => {
@@ -899,7 +953,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     const rect = frame.getBoundingClientRect();
     const L = hitTest(e.clientX - rect.left, e.clientY - rect.top, rect);
     if (!L) return false;
-    select(L.id); if (!isImg(L) && !isShape(L)) focusText();
+    select(L.id); if (isTxt(L)) startInline(L, false);
     return true;
   }
   function keydown(e) {

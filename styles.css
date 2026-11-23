@@ -691,3 +691,9 @@ body.is-video #sliders .tint, body.is-video #sliders .vibrance, body.is-video #s
 .ghost-src { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: 0; transition: opacity .25s; }
 .ghost-src.on { opacity: 1; transition: opacity .08s; }
 .frame.reel .guides::before { display: none; }
+
+/* escribir directo sobre la publicación */
+.tinline { position: absolute; margin: 0; padding: 0; border: 0; outline: none; background: transparent; resize: none; overflow: hidden;
+  white-space: pre; pointer-events: auto; z-index: 4; transform-origin: 50% 50%; cursor: text; }
+.tinline[hidden] { display: none; }
+.tbox.editing .tcorner, .tbox.editing .thandle, .tbox.editing::before { display: none !important; }
