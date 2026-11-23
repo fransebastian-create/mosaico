@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.26';
+  const VERSION = 'v1.27';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1096,8 +1096,9 @@
       }
       if (isVid && !S.video && S.videoOpening !== id) {
         S.videoOpening = id;   // si se abre dos veces seguidas (doble clic), no se crean dos videos
+        let vblob = null;
         try {
-          const vblob = await getVideoBlob(it);
+          vblob = await getVideoBlob(it);
           if (S.current !== it || !vblob) return;
           const v = await openVideo(vblob);
           if (S.current !== it || S.video) { closeVideo(v); return; }
@@ -1149,6 +1150,7 @@
   try { igGuides = localStorage.getItem('mosaico.igGuides') === '1'; } catch { }
   function reelGuides(it) {
     const on = !!it && aspectOf(it) !== ASPECT;
+    frame.classList.toggle('reel', on);
     guides.hidden = !on; if (!on) return;
     const H = frame.clientHeight, W = frame.clientWidth, gh = Math.min(H, W / S.gridAspect), top = (H - gh) / 2;
     guides.style.setProperty('--gt', top + 'px'); guides.style.setProperty('--gh', gh + 'px');
@@ -1420,7 +1422,43 @@
   }
   const zoomAt = (px, py, factor, rect) => anchored(px, py, rect, c => { c.z *= factor; });
   const rotateTo = (px, py, rot, rect) => anchored(px, py, rect, c => { c.rot = rot; });
-  function cropChanged() { syncCropUI(); requestRender(); saveItem(S.current); }
+  function cropChanged() { syncCropUI(); requestRender(); saveItem(S.current); ghostShow(); }
+
+  // ---- mientras se mueve / agranda / gira el fondo: la foto o el video entero, tenue y con su borde, también fuera del marco ----
+  const ghost = document.createElement('canvas');
+  ghost.className = 'ghost-src';
+  stage.insertBefore(ghost, frame);   // debajo del marco: adentro se ve el recorte, afuera lo que queda fuera
+  let ghostTimer = 0, ghostRaf = 0;
+  function drawGhost() {
+    ghostRaf = 0;
+    const it = S.current;
+    if (!it || it.kind === 'blank' || !ghost.classList.contains('on')) return;
+    const src = source(it); if (!src || !src.img) return;
+    const sr = stage.getBoundingClientRect(), fr = frame.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const W = Math.round(sr.width * dpr), H = Math.round(sr.height * dpr);
+    if (ghost.width !== W || ghost.height !== H) { ghost.width = W; ghost.height = H; }
+    const g = ghost.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H);
+    const c = it.crop, { fh } = frameSize(it.w, it.h, c), k = dpr * fr.height / fh;   // px de pantalla por px de la foto
+    const a = rad(c.rot || 0), co = Math.cos(a), si = Math.sin(a), X0 = c.cx * it.w, Y0 = c.cy * it.h;
+    const fcx = (fr.left - sr.left + fr.width / 2) * dpr, fcy = (fr.top - sr.top + fr.height / 2) * dpr;
+    g.setTransform(co * k, si * k, -si * k, co * k, fcx - (co * X0 - si * Y0) * k, fcy - (si * X0 + co * Y0) * k);
+    g.globalAlpha = 0.32; g.imageSmoothingQuality = 'low';
+    try { g.drawImage(src.img, 0, 0, it.w, it.h); } catch { }
+    g.globalAlpha = 1; g.lineWidth = 1.5 * dpr / k; g.setLineDash([7 * dpr / k, 5 * dpr / k]);
+    g.strokeStyle = 'rgba(255,255,255,.9)'; g.strokeRect(0, 0, it.w, it.h);
+  }
+  function ghostShow() {
+    if (!S.current || S.current.kind === 'blank') return;
+    ghost.classList.add('on');
+    if (!ghostRaf) ghostRaf = requestAnimationFrame(drawGhost);
+    clearTimeout(ghostTimer);
+    ghostTimer = setTimeout(ghostHide, 1400);
+  }
+  function ghostHide() {
+    if (ptrs.size) { ghostTimer = setTimeout(ghostHide, 400); return; }   // mientras siga apretando, queda
+    ghost.classList.remove('on');
+  }
 
   // Giro con gesto: hay que girar más de unos grados para que empiece (así el zoom no gira sin querer),
   // y se "imanta" a 0°, 90°, 180°…
@@ -1462,6 +1500,7 @@
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (ptrs.size === 2) twist = makeTwist();
     frame.classList.add('dragging');
+    ghostShow();
   });
   frame.addEventListener('pointermove', e => {
     if (T.pointerMove(e)) return;
