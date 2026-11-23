@@ -593,10 +593,24 @@ window.createMosaicoText = function createMosaicoText(A) {
     return null;
   }
   const SNAP = 0.012;
+  // al arrastrar: el centro se pega al centro de la publicación y al centro de las otras capas
+  // (en una imagen recortada, el centro es el del recorte)
   function placeWithSnap(L, rx, ry) {
-    const sx = Math.abs(rx - 0.5) < SNAP, sy = Math.abs(ry - 0.5) < SNAP;
-    L.x = clamp(sx ? 0.5 : rx, 0, 1); L.y = clamp(sy ? 0.5 : ry, 0, 1);
-    snapV.classList.toggle('on', sx); snapH.classList.toggle('on', sy);
+    let bx = null, by = null, dx = SNAP, dy = SNAP, ox = null, oy = null;
+    const cand = [{ x: 0.5, y: 0.5, o: null }, ...((S.current && S.current.texts) || []).filter(o => o !== L && !o.hidden && o._box).map(o => ({ x: o.x, y: o.y, o }))];
+    for (const c of cand) {
+      const ex = Math.abs(rx - c.x), ey = Math.abs(ry - c.y);
+      if (ex < dx || (ex === dx && !c.o)) { dx = ex; bx = c.x; ox = c.o; }
+      if (ey < dy || (ey === dy && !c.o)) { dy = ey; by = c.y; oy = c.o; }
+    }
+    L.x = clamp(bx ?? rx, 0, 1); L.y = clamp(by ?? ry, 0, 1);
+    snapV.classList.toggle('on', bx !== null); snapH.classList.toggle('on', by !== null);
+    if (bx !== null) snapV.style.left = `calc(${bx * 100}% - .5px)`;
+    if (by !== null) snapH.style.top = `calc(${by * 100}% - .5px)`;
+    // centro con centro de otra capa: un círculo rosa en el centro
+    const both = bx !== null && by !== null && ox && ox === oy;
+    magDot.classList.toggle('on', !!both); magDot.classList.remove('edge');
+    if (both) { magDot.style.left = bx * frame.clientWidth + 'px'; magDot.style.top = by * frame.clientHeight + 'px'; }
   }
   let g = null;              // gesto en curso sobre un texto
   let tapCandidate = null;   // toque en un lugar vacío (para deseleccionar)
@@ -682,7 +696,7 @@ window.createMosaicoText = function createMosaicoText(A) {
       const L = g.L, wasTap = g.moved < 4;
       g = null;
       frame.classList.remove('dragging');
-      snapV.classList.remove('on'); snapH.classList.remove('on');
+      snapV.classList.remove('on'); snapH.classList.remove('on'); magDot.classList.remove('on');
       if (wasTap) {   // doble toque sobre el texto: editar
         const now = Date.now();
         if (lastTap.id === L.id && now - lastTap.t < 350 && !isImg(L) && !isShape(L)) focusText();
