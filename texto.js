@@ -1194,7 +1194,8 @@ window.createMosaicoText = function createMosaicoText(A) {
   }
   for (const [side, label] of [['t', 'Recortar arriba'], ['b', 'Recortar abajo'], ['l', 'Recortar izquierda'], ['r', 'Recortar derecha']])
     slider($('#tSizeRot'), { label, min: 0, max: 980, get: L => Math.round((L['c' + side] || 0) * 1000), set: cropSet(side), fmt: pctCrop, cls: 'img-only' });
-  slider($('#tSizeRot'), { label: 'Giro', min: -180, max: 180, step: 0.5, get: L => L.rot || 0, set: (L, v) => { L.rot = snapRot(v); }, fmt: v => (Math.abs(v) < 0.05 ? '0' : v > 0 ? '+' + v : v) + '°' });
+  // la barra y los − / + giran exacto, de a 0,1° (el imán a 0° / 90° queda sólo para los gestos)
+  slider($('#tSizeRot'), { label: 'Giro', min: -180, max: 180, step: 0.1, get: L => Math.round((L.rot || 0) * 10) / 10, set: (L, v) => { L.rot = Math.round(v * 10) / 10; }, fmt: v => (Math.abs(v) < 0.05 ? '0' : (v > 0 ? '+' : '') + (+v).toFixed(1).replace('.', ',')) + '°' });
   slider($('#tLook'), { label: 'Grosor', min: -100, max: 100, get: L => L.weight || 0, set: (L, v) => { L.weight = v; }, fmt: v => (v > 0 ? '+' : '') + v, cls: 'txt-only' });
   slider($('#tLook'), { label: 'Opacidad', min: 5, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct, cls: 'no-fillshape' });
   slider($('#tLook'), { label: 'Opacidad del relleno', min: 0, max: 100, get: L => Math.round((L.opacity ?? 1) * 100), set: (L, v) => { L.opacity = v / 100; }, fmt: pct, cls: 'shape-only no-line' });

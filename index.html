@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Inter:wght@400;700&family=Playfair+Display:ital@0;1&display=swap">
-<link rel="stylesheet" href="styles.css?v=1.28">
+<link rel="stylesheet" href="styles.css?v=1.29">
 </head>
 <body>
 <div id="updPill" class="upd-pill" hidden><span id="updText">Hay una versión nueva de Mosaico</span><button id="updBtn" class="btn">Actualizar</button></div>
@@ -107,14 +107,14 @@
         <label><span>Zoom del recorte</span><output id="zoomOut">100%</output></label>
         <input id="zoomInput" type="range" min="100" max="500" step="0.1" value="100">
       </div></div>
-      <div class="slider rotate-row">
+      <div id="rotWrap"><div class="slider rotate-row">
         <label><span>Enderezar</span><output id="rotOut">0°</output></label>
         <div class="frame-ctl">
           <button id="rotL" class="chip" title="Girar 90° a la izquierda">↺</button>
           <input id="rotInput" type="range" min="-45" max="45" step="0.1" value="0" aria-label="Enderezar">
           <button id="rotR" class="chip" title="Girar 90° a la derecha">↻</button>
         </div>
-      </div>
+      </div></div>
       <div id="sliders"></div>
       <div id="textPanel"></div>
       <p class="hint">Arrastrá la foto para mover el recorte. Con dos dedos (o el trackpad) podés agrandar y achicar; para girar de a poquito, mantené <b>⌥ Option</b> y deslizá dos dedos (o la rueda del mouse). Doble clic en la foto la recentra; doble clic en un ajuste lo vuelve a cero. Las capas (textos e imágenes) se suman desde el panel <b>Capas</b>. Para armar un carrusel, tocá <b>+ Diapositiva</b>.</p>
@@ -228,9 +228,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="config.js?v=1.28"></script>
-<script src="drive.js?v=1.28"></script>
-<script src="texto.js?v=1.28"></script>
-<script src="app.js?v=1.28"></script>
+<script src="config.js?v=1.29"></script>
+<script src="drive.js?v=1.29"></script>
+<script src="texto.js?v=1.29"></script>
+<script src="app.js?v=1.29"></script>
 </body>
 </html>

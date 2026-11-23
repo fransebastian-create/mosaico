@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.28';
+  const VERSION = 'v1.29';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1613,7 +1613,7 @@
   $('#rotL').addEventListener('click', () => S.current && setRotation((S.current.crop.rot || 0) - 90));
   $('#rotR').addEventListener('click', () => S.current && setRotation((S.current.crop.rot || 0) + 90));
 
-  const fmtDeg = d => (Math.abs(d) < 0.05 ? '0' : (d > 0 ? '+' : '') + d.toFixed(1)) + '°';
+  const fmtDeg = d => (Math.abs(d) < 0.05 ? '0' : (d > 0 ? '+' : '') + d.toFixed(1).replace('.', ',')) + '°';
   function syncCropUI() {
     if (!S.current) return;
     const c = S.current.crop;
@@ -1686,7 +1686,7 @@
   // Botones − / + junto al número de cada ajuste, para mover de a un paso (mantener apretado repite).
   function addNudges(root) {
     root.querySelectorAll('.slider').forEach(row => {
-      const inp = row.querySelector(':scope > input[type=range]'), lab = row.querySelector(':scope > label'), out = lab && lab.querySelector('output');
+      const inp = row.querySelector(':scope > input[type=range]') || row.querySelector(':scope > .frame-ctl > input[type=range]'), lab = row.querySelector(':scope > label'), out = lab && lab.querySelector('output');
       if (!inp || !out) return;
       const head = document.createElement('div'); head.className = 'lbl';   // no <label>: si no, tocar el nombre apretaría el botón
       head.append(...lab.childNodes); lab.replaceWith(head);
@@ -1711,7 +1711,7 @@
       wrap.append(mk(-1, '−'), out, mk(1, '+'));
     });
   }
-  addNudges($('#sliders')); addNudges($('#textPanel')); addNudges($('#zoomWrap'));   // − / + finos en el zoom del recorte
+  addNudges($('#sliders')); addNudges($('#textPanel')); addNudges($('#zoomWrap')); addNudges($('#rotWrap'));   // − / + finos en el zoom y en Enderezar (de a 0,1°, sin imán)
   function syncControls() {
     const it = S.current; if (!it) return;
     for (const a of ADJ) {
