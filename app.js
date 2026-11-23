@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.29';
+  const VERSION = 'v1.30';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1108,7 +1108,7 @@
         } finally { if (S.videoOpening === id) S.videoOpening = null; }
         requestRender();
         buildStrip(it, vblob);
-        vidPlay();   // el video de fondo arranca solo (sin sonido, salvo que lo hayas prendido)
+        syncVidUI();   // el video abre en pausa, en el cuadro de portada; corre recién con Reproducir o la barra espaciadora
       }
     } catch (e) { console.error(e); toast((isVid ? 'No se pudo abrir el video: ' : 'No se pudo abrir el original: ') + (e.message || e), false, 8000); }
   }
