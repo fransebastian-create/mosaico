@@ -572,7 +572,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!L || !L._box) { box.hidden = true; return; }
     placeBox(box, L);
     box.classList.toggle('multi', isMulti());
-    box.classList.toggle('shape', isShape(L)); box.classList.toggle('ellipse', isShape(L) && L.shape === 'ellipse'); box.classList.toggle('line', isLine(L)); box.classList.toggle('txt', isTxt(L)); handle.title = isImg(L) ? 'Arrastrá para agrandar y girar' : 'Arrastrá para girar';
+    box.classList.toggle('shape', isShape(L)); box.classList.toggle('ellipse', isShape(L) && L.shape === 'ellipse'); box.classList.toggle('line', isLine(L)); box.classList.toggle('txt', isTxt(L) || isImg(L)); handle.title = 'Arrastrá para girar';
     if (isShape(L)) {   // tirador de redondeo: más adentro cuanto más redondeado
       const Hc = frame.clientHeight, w = L.size * (L.ar || 1) * Hc, h = L.size * Hc;
       const m = 12 + (L.radius || 0) * Math.min(w, h) * 0.35;
@@ -707,7 +707,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!hg || hg.id !== e.pointerId) return;
     e.stopPropagation();
     const d = Math.hypot(e.clientX - hg.cx, e.clientY - hg.cy), a = Math.atan2(e.clientY - hg.cy, e.clientX - hg.cx) * 180 / Math.PI;
-    if (isImg(hg.L)) hg.L.size = clamp(hg.size0 * d / hg.d0, 0.012, maxSize(hg.L));   // en formas y textos sólo gira (las esquinas agrandan)
+    // sólo gira: para agrandar están las esquinas
     hg.L.rot = snapRot(normRot(hg.rot0 + normRot(a - hg.a0)));
     changed(); syncPanelValues();
   });
@@ -724,7 +724,7 @@ window.createMosaicoText = function createMosaicoText(A) {
   };
   function sideStart(kind, e) {
     const L = cur(); if (!L || L.locked || isMulti()) return;
-    if (!isShape(L) && !(isTxt(L) && kind.length === 2)) return;   // los textos sólo tienen las esquinas
+    if (!isShape(L) && !((isTxt(L) || isImg(L)) && kind.length === 2)) return;   // textos e imágenes sólo tienen las esquinas
     e.stopPropagation(); e.preventDefault();
     try { e.target.setPointerCapture(e.pointerId); } catch { }
     sg = { kind, id: e.pointerId, L, p0: localPt(L, e), size0: L.size, ar0: L.ar || 1, x0: L.x, y0: L.y, box0: L._box ? { ...L._box } : null };
@@ -734,7 +734,7 @@ window.createMosaicoText = function createMosaicoText(A) {
     if (!sg || sg.id !== e.pointerId) return;
     e.stopPropagation();
     const { L } = sg, p = sg.kind === 'rad' ? localPt(L, e) : localPt(L, e, sg.x0, sg.y0), H = p.H, a = rad(L.rot || 0);
-    if (sg.kind.length === 2 && isTxt(L) && sg.box0) {   // texto: agranda o achica la letra en proporción; la esquina opuesta queda quieta
+    if (sg.kind.length === 2 && (isTxt(L) || isImg(L)) && sg.box0) {   // texto o imagen: agranda o achica en proporción; la esquina opuesta queda quieta
       const sx = sg.kind[1] === 'r' ? 1 : -1, sy = sg.kind[0] === 'b' ? 1 : -1;
       const w0 = sg.box0.w, h0 = sg.box0.h, ox = -sx * w0 / 2, oy = -sy * h0 / 2, dx0 = sx * w0, dy0 = sy * h0;
       const cx = sx * w0 / 2 + (p.x - sg.p0.x) / H, cy = sy * h0 / 2 + (p.y - sg.p0.y) / H;
