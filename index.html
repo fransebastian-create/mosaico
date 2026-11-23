@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Inter:wght@400;700&family=Playfair+Display:ital@0;1&display=swap">
-<link rel="stylesheet" href="styles.css?v=1.27">
+<link rel="stylesheet" href="styles.css?v=1.28">
 </head>
 <body>
 <div id="updPill" class="upd-pill" hidden><span id="updText">Hay una versión nueva de Mosaico</span><button id="updBtn" class="btn">Actualizar</button></div>
@@ -103,10 +103,10 @@
           <button id="frameNext" class="chip" title="Fotograma siguiente">›</button>
         </div>
       </div>
-      <div class="slider zoom">
+      <div id="zoomWrap"><div class="slider zoom">
         <label><span>Zoom del recorte</span><output id="zoomOut">100%</output></label>
-        <input id="zoomInput" type="range" min="100" max="500" step="1" value="100">
-      </div>
+        <input id="zoomInput" type="range" min="100" max="500" step="0.1" value="100">
+      </div></div>
       <div class="slider rotate-row">
         <label><span>Enderezar</span><output id="rotOut">0°</output></label>
         <div class="frame-ctl">
@@ -228,9 +228,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="config.js?v=1.27"></script>
-<script src="drive.js?v=1.27"></script>
-<script src="texto.js?v=1.27"></script>
-<script src="app.js?v=1.27"></script>
+<script src="config.js?v=1.28"></script>
+<script src="drive.js?v=1.28"></script>
+<script src="texto.js?v=1.28"></script>
+<script src="app.js?v=1.28"></script>
 </body>
 </html>

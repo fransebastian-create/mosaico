@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.27';
+  const VERSION = 'v1.28';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -1617,8 +1617,8 @@
   function syncCropUI() {
     if (!S.current) return;
     const c = S.current.crop;
-    const z = Math.round(c.z * 100);
-    zoomInput.value = z; zoomOut.textContent = z + '%';
+    const z = Math.round(c.z * 1000) / 10;   // de a 0,1 %
+    zoomInput.value = z; zoomOut.textContent = z.toFixed(1).replace('.', ',') + '%';
     const rot = c.rot || 0, b = normRot(base90(rot)), fine = rot - base90(rot);
     rotInput.value = fine.toFixed(1);
     rotOut.textContent = fmtDeg(fine) + (b ? `  ·  girada ${b > 0 ? b : 360 + b}°` : '');
@@ -1711,7 +1711,7 @@
       wrap.append(mk(-1, '−'), out, mk(1, '+'));
     });
   }
-  addNudges($('#sliders')); addNudges($('#textPanel'));
+  addNudges($('#sliders')); addNudges($('#textPanel')); addNudges($('#zoomWrap'));   // − / + finos en el zoom del recorte
   function syncControls() {
     const it = S.current; if (!it) return;
     for (const a of ADJ) {
@@ -2886,6 +2886,13 @@
     const tag = (e.target.tagName || '').toLowerCase();
     if ((tag === 'input' && e.target.type !== 'range') || tag === 'textarea' || tag === 'select') return;
     const mod = e.metaKey || e.ctrlKey;
+    // barra espaciadora: reproducir / pausar el video de fondo
+    if (e.key === ' ' && !mod && !e.altKey && S.current && S.current.kind === 'video' && S.video && S.video.id === S.current.id && !e.target.isContentEditable) {
+      e.preventDefault();
+      if (document.activeElement && document.activeElement.tagName === 'BUTTON') document.activeElement.blur();   // que no "apriete" el botón que tenía el foco
+      if (vidPlaying()) vidPause(); else vidPlay();
+      return;
+    }
     if (mod && ((e.shiftKey && e.key.toLowerCase() === 'z') || (!e.metaKey && e.key.toLowerCase() === 'y'))) { Hist.redo(); e.preventDefault(); }
     else if (mod && !e.shiftKey && e.key.toLowerCase() === 'z') { undoAny(); e.preventDefault(); }
     else if (mod && e.key.toLowerCase() === 'c' && !getSelection().toString()) { copyPost(); e.preventDefault(); }
