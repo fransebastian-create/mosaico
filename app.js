@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   // ================= Constantes =================
-  const VERSION = 'v1.35';
+  const VERSION = 'v1.36';
   const ASPECT = 4 / 5;        // publicación (ancho / alto)
   const GRID_ASPECT = 3 / 4;   // miniatura del perfil
   const OUT_W = 1080, OUT_H = 1350;
@@ -2706,11 +2706,51 @@
     await enc.flush(); enc.close();
     return true;
   }
-  async function exportVideoFrames(it, job) {
+  // ---- leer los cuadros del video en orden, sin "saltar" (WebCodecs + mp4box): mucho más rápido que buscar cada cuadro,
+  // y sigue funcionando aunque cambies de pestaña ----
+  let demuxLib = null;
+  function loadDemuxer() {
+    return demuxLib ||= new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js';
+      s.onload = () => window.MP4Box ? res(window.MP4Box) : rej(new Error('lector de MP4 no disponible'));
+      s.onerror = () => { demuxLib = null; rej(new Error('no se pudo cargar el lector de MP4')); };
+      document.head.append(s);
+    });
+  }
+  // ceder el turno sin timers (los timers se frenan en las pestañas de atrás; los mensajes no)
+  const yieldNow = () => new Promise(r => { const mc = new MessageChannel(); mc.port1.onmessage = () => { mc.port1.close(); r(); }; mc.port2.postMessage(0); });
+  async function demuxVideo(vblob) {
+    if (typeof VideoDecoder === 'undefined' || typeof EncodedVideoChunk === 'undefined') return null;
+    let MP4Box; try { MP4Box = await loadDemuxer(); } catch { return null; }
+    const buf = await vblob.arrayBuffer();
+    const file = MP4Box.createFile(); let track = null; const samples = [];
+    file.onError = () => { track = null; };
+    file.onReady = info => { track = info.videoTracks && info.videoTracks[0]; if (!track) return; file.setExtractionOptions(track.id, null, { nbSamples: Infinity }); file.start(); };
+    file.onSamples = (id, user, ss) => { for (const x of ss) samples.push(x); };
+    try { buf.fileStart = 0; file.appendBuffer(buf); file.flush(); } catch { return null; }
+    if (!track || !samples.length) return null;
+    let desc = null;
+    try {
+      const trak = file.getTrackById(track.id);
+      for (const e of trak.mdia.minf.stbl.stsd.entries) {
+        const box = e.avcC || e.hvcC || e.vpcC || e.av1C;
+        if (box) { const st = new window.DataStream(undefined, 0, window.DataStream.BIG_ENDIAN); box.write(st); desc = new Uint8Array(st.buffer, 8); break; }
+      }
+    } catch { return null; }
+    const cfg = { codec: track.codec, codedWidth: track.video.width, codedHeight: track.video.height, ...(desc ? { description: desc } : {}) };
+    try { if (!(await VideoDecoder.isConfigSupported(cfg)).supported) return null; } catch { return null; }
+    const m = track.matrix || [65536, 0, 0, 0, 65536, 0];   // giro guardado en el video (los del iPhone vienen acostados)
+    const rot = ((Math.round(Math.atan2(m[1], m[0]) * 180 / Math.PI) % 360) + 360) % 360;
+    return { cfg, samples, rot };
+  }
+  async function exportVideoFrames(it, job, useDecode = true) {
     const vblob = await getVideoBlob(it); if (!vblob) throw new Error('no se encontró el video');
     const { w: OW, h: OH } = outSize(it), FPS = 30;
     const vcfg = await pickVideoCodec(OW, OH);
     if (!vcfg) return null;   // sin codificador: se usa la grabación en tiempo real
+    const dm = useDecode ? await demuxVideo(vblob) : null;
+    if (useDecode && !dm) return exportVideoFrames(it, job, false);   // no se pudo leer en orden: cuadro por cuadro buscando
     const Mp4Muxer = await loadMuxer();
     if (vidPlaying()) vidPause();
     await T.fontsReady(it);
@@ -2734,21 +2774,65 @@
     let encErr = null;
     const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: e => { encErr = e; } });
     enc.configure(vcfg);
-    const v = await openVideo(vblob); v._export = true;
+    const c = canvas(OW, OH), cx = c.getContext('2d');
+    const total = Math.max(1, Math.round((b - a) * FPS));
+    let done = 0;
+    // dibuja un cuadro de salida (con ajustes, capas y fundidos) y lo manda al codificador
+    const emitOut = async (src, sw, sh, i) => {
+      if (encErr) throw encErr;
+      const t = a + i / FPS;
+      const out = R.render(src, sw, sh, it.crop, it.adj, OW, OH, aspectOf(it));
+      cx.drawImage(out, 0, 0); applyVeil(cx, it, OW, OH); T.draw(cx, it, OW, OH); applyFade(cx, it, t, OW, OH);
+      const fr = new VideoFrame(c, { timestamp: Math.round(i * 1e6 / FPS), duration: Math.round(1e6 / FPS) });
+      enc.encode(fr, { keyFrame: i % (FPS * 2) === 0 }); fr.close();
+      while (enc.encodeQueueSize > 4) await yieldNow();
+      done = i + 1;
+      job.progress(done / total * (audioInfo ? 0.95 : 1));
+    };
+    let v = null, dec = null, prev = null;
     try {
-      const c = canvas(OW, OH), cx = c.getContext('2d');
-      const total = Math.max(1, Math.round((b - a) * FPS));
-      for (let i = 0; i < total; i++) {
-        if (job.cancel) break;
-        if (encErr) throw encErr;
-        const t = a + i / FPS;
-        await seekVideo(v, t);
-        const out = R.render(v, v.videoWidth, v.videoHeight, it.crop, it.adj, OW, OH, aspectOf(it));
-        cx.drawImage(out, 0, 0); applyVeil(cx, it, OW, OH); T.draw(cx, it, OW, OH); applyFade(cx, it, t, OW, OH);
-        const fr = new VideoFrame(c, { timestamp: Math.round(i * 1e6 / FPS), duration: Math.round(1e6 / FPS) });
-        enc.encode(fr, { keyFrame: i % (FPS * 2) === 0 }); fr.close();
-        while (enc.encodeQueueSize > 4) await new Promise(r => setTimeout(r, 5));
-        job.progress((i + 1) / total * (audioInfo ? 0.95 : 1));
+      if (dm) {
+        const { cfg, samples, rot } = dm;
+        const side = rot === 90 || rot === 270, DW = side ? cfg.codedHeight : cfg.codedWidth, DH = side ? cfg.codedWidth : cfg.codedHeight;
+        const sc = canvas(DW, DH), sx = sc.getContext('2d');
+        const frames = []; let decErr = null;
+        dec = new VideoDecoder({ output: f => frames.push(f), error: e => { decErr = e; } });
+        dec.configure(cfg);
+        const put = f => {   // el cuadro, derecho (si el video viene girado)
+          sx.setTransform(1, 0, 0, 1, 0, 0);
+          if (rot) { sx.translate(DW / 2, DH / 2); sx.rotate(rot * Math.PI / 180); sx.drawImage(f, -cfg.codedWidth / 2, -cfg.codedHeight / 2); }
+          else sx.drawImage(f, 0, 0, DW, DH);
+        };
+        let i = 0;
+        const take = async f => {   // cada cuadro de salida usa el último cuadro del video que ya empezó
+          const t = f.timestamp / 1e6;
+          while (prev && i < total && a + i / FPS < t - 1e-4) { put(prev); await emitOut(sc, DW, DH, i); i++; }
+          if (prev) prev.close();
+          prev = f;
+        };
+        const drain = async () => { while (frames.length) await take(frames.shift()); };
+        const secs = x => x.cts / x.timescale;
+        let k0 = 0;
+        for (let k = 0; k < samples.length; k++) if (samples[k].is_sync && secs(samples[k]) <= a + 1e-3) k0 = k;   // desde el cuadro completo anterior al corte
+        for (let k = k0; k < samples.length; k++) {
+          if (job.cancel || decErr || i >= total) break;
+          const x = samples[k];
+          if (x.is_sync && secs(x) > b + 0.2) break;   // ya pasó el final del pedazo
+          dec.decode(new EncodedVideoChunk({ type: x.is_sync ? 'key' : 'delta', timestamp: Math.round(1e6 * x.cts / x.timescale), duration: Math.round(1e6 * x.duration / x.timescale), data: x.data }));
+          await drain();
+          while (dec.decodeQueueSize > 6 && !decErr) { await drain(); await yieldNow(); }
+        }
+        if (decErr) throw decErr;
+        if (!job.cancel) { await dec.flush(); await drain(); }
+        while (!job.cancel && prev && i < total) { put(prev); await emitOut(sc, DW, DH, i); i++; }
+        if (!job.cancel && done < total * 0.9) throw new Error('el video se leyó incompleto');
+      } else {
+        v = await openVideo(vblob); v._export = true;
+        for (let i = 0; i < total; i++) {
+          if (job.cancel) break;
+          await seekVideo(v, a + i / FPS);
+          await emitOut(v, v.videoWidth, v.videoHeight, i);
+        }
       }
       await enc.flush(); enc.close();
       if (job.cancel) return { canceled: true };
@@ -2756,11 +2840,19 @@
       muxer.finalize();
       job.progress(1);
       return { blob: new Blob([target.buffer], { type: 'video/mp4' }), ext: 'mp4' };
-    } finally { closeVideo(v); try { if (enc.state !== 'closed') enc.close(); } catch { } }
+    } catch (e) {
+      if (dm && !job.cancel && done === 0) { console.warn('lectura en orden falló, se usa la otra forma', e); return exportVideoFrames(it, job, false); }
+      throw e;
+    } finally {
+      if (prev) try { prev.close(); } catch { }
+      if (dec) try { if (dec.state !== 'closed') dec.close(); } catch { }
+      if (v) closeVideo(v);
+      try { if (enc.state !== 'closed') enc.close(); } catch { }
+    }
   }
   function openVidDownload(it) {
     const sh = $('#vidDlSheet'), { a, b } = trimOf(it);
-    $('#vidDlNote').textContent = `Se arma cuadro por cuadro (${(b - a).toFixed(1).replace('.', ',')} s de video): puede tardar un poco más que el video, pero no se saltea nada.`;
+    $('#vidDlNote').textContent = `Se arma cuadro por cuadro (${(b - a).toFixed(1).replace('.', ',')} s de video), sin saltearse nada. Mientras tanto podés seguir en otra pestaña.`;
     sh.hidden = false;
     sh.onclick = async e => {
       const btn = e.target.closest('[data-v]'); if (!btn && e.target !== sh) return;
